@@ -1,0 +1,13 @@
+# Explicit non-GEM target boundary for the core-lineage denominator.
+#
+# Format: class source-path
+#
+# Only retained functions already classified as ELKS/XT-only may be removed
+# from the core denominator by this list.  Direct-derived original GEMDOS
+# wrapper functions in gemdos_posix.c remain GEM core code.  The whole-client
+# metric continues to include every line, so this manifest cannot hide porting
+# cost; it only reports the user's requested "core GEM" percentage separately.
+
+boundary src/aes/gemdos_posix.c
+boundary src/aes/gem_wordpair.c
+boundary src/aes/opengem/gemdesk_posix.c

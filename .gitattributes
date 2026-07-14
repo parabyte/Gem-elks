@@ -1,0 +1,5 @@
+# Preserve historical source and binary GEM resources byte for byte.
+assets/GEMAPPS/GEMSYS/*.ICN binary
+assets/GEMAPPS/GEMSYS/*.RSC binary
+src/aes/opengem/*.[ch] -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+src/bindings/original/*.[ch] -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab

@@ -1,0 +1,234 @@
+##############################################################################
+# Native GEM core for ELKS on 8088/8086 systems.
+#
+# The external ELKS tree supplies the ia16 compiler, ELKS libc, kernel headers,
+# and objdump86.  No ELKS source is copied into this repository.
+##############################################################################
+
+ELKS_ROOT ?= ../elks
+ELKS_CROSS ?= $(ELKS_ROOT)/cross/bin
+ELKS_TOOLS ?= $(ELKS_ROOT)/elks/tools/bin
+
+ifeq ($(origin CC),default)
+CC := $(ELKS_CROSS)/ia16-elf-gcc
+endif
+ifeq ($(origin AR),default)
+AR := $(ELKS_CROSS)/ia16-elf-ar
+endif
+
+OBJDUMP ?= $(ELKS_CROSS)/ia16-elf-objdump
+OBJDUMP86 ?= $(ELKS_TOOLS)/objdump86
+NM ?= $(ELKS_CROSS)/ia16-elf-nm
+export PATH := $(ELKS_TOOLS):$(PATH)
+BUILD_DIR ?= build
+OBJ_DIR := $(BUILD_DIR)/obj
+TRAP_OBJ_DIR := $(OBJ_DIR)/trap
+LIB_DIR := $(BUILD_DIR)/lib
+BIN_DIR := $(BUILD_DIR)/bin
+MAP_DIR := $(BUILD_DIR)/maps
+
+CPPFLAGS += \
+	-DELKS=1 \
+	-DUNIX=1 \
+	-DI8086=1 \
+	-DNDEBUG=1 \
+	-DMULTIAPP=1 \
+	-DSMALL_DATA=1 \
+	-I src/include \
+	-I $(ELKS_ROOT)/libc/include \
+	-I $(ELKS_ROOT)/elks/include
+
+BINDINGS_CPPFLAGS := \
+	-I src/bindings/original \
+	-DGEM_BINDINGS_ENABLE_DOS_PROCESS=1 \
+	-DUSER_INTIN=1
+
+OPTFLAGS ?= -O2
+EXTRA_CFLAGS := $(CFLAGS)
+override CFLAGS := \
+	$(OPTFLAGS) \
+	$(EXTRA_CFLAGS) \
+	-mcmodel=medium \
+	-melks-libc \
+	-march=i8086 \
+	-mtune=i8086 \
+	-msegment-relocation-stuff \
+	-fno-inline \
+	-ffunction-sections \
+	-fdata-sections \
+	-fno-builtin-printf \
+	-fno-builtin-fprintf \
+	-std=gnu89 \
+	-Wall \
+	-Wno-implicit-function-declaration \
+	-Wno-implicit-int \
+	-Wno-int-conversion \
+	-Wno-pointer-to-int-cast \
+	-Wno-int-to-pointer-cast \
+	-Wno-unused-function \
+	-Wno-unused-variable \
+	-Wno-unused-but-set-variable \
+	-Wno-missing-field-initializers
+
+ARFLAGS := rcs
+
+VDI_SRCS := \
+	src/vdi/gem_vdi.c \
+	src/vdi/gem_input.c \
+	src/vdi/drivers/gem_pcvideo.c
+
+VDI_ASM_SRCS := src/vdi/drivers/gem_pcvideo_asm.S
+
+RESIDENT_SRCS := \
+	src/aes/apps/gemaes.c \
+	src/aes/gem_aes_resident.c \
+	src/aes/gem_event_resident.c \
+	src/aes/gem_form_resident.c \
+	src/aes/gem_graf_resident.c \
+	src/aes/gem_resident_memory.c \
+	src/aes/gem_resource_resident.c \
+	src/aes/gem_menu_object_resident.c \
+	src/aes/gem_menu_pull_resident.c \
+	src/aes/gem_shell_resident.c \
+	src/aes/gem_startup_resident.c \
+	src/aes/gem_object_resident.c \
+	src/aes/gem_window_resident.c \
+	src/aes/gem_far_resource_elks.c \
+	src/vdi/gem_vdi_resident.c \
+	src/aes/gem_proc_elks.c
+
+DESKTOP_SRCS := \
+	src/aes/opengem/desktop.c \
+	src/aes/opengem/desk1.c \
+	src/aes/opengem/deskact.c \
+	src/aes/opengem/deskfun.c \
+	src/aes/opengem/deskwin.c \
+	src/aes/opengem/deskpro.c \
+	src/aes/opengem/deskppd.c \
+	src/aes/opengem/deskobj.c \
+	src/aes/opengem/deskfpd.c \
+	src/aes/opengem/deskins.c \
+	src/aes/opengem/deskapp1.c \
+	src/aes/opengem/deskapp2.c \
+	src/aes/opengem/deskapp3.c \
+	src/aes/opengem/deskgraf.c \
+	src/aes/opengem/deskrsrc.c \
+	src/aes/opengem/deskinf.c \
+	src/aes/opengem/deskdir.c \
+	src/aes/opengem/deskgsx.c \
+	src/aes/opengem/desktype.c \
+	src/aes/opengem/deskcds.c \
+	src/aes/opengem/optimize.c \
+	src/aes/opengem/desksupp.c \
+	src/aes/opengem/deskiacc.c \
+	src/aes/opengem/gemdesk_posix.c
+
+DESKTOP_SEAM_SRCS := \
+	src/aes/gemdos_posix.c \
+	src/aes/gem_wordpair.c
+
+# Only binding units selected by the final Desktop link are retained here.
+TRAP_BINDING_SRCS := $(wildcard src/bindings/original/*.c)
+
+VDI_OBJECTS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(VDI_SRCS))
+VDI_ASM_OBJECTS := $(patsubst src/%.S,$(OBJ_DIR)/%.o,$(VDI_ASM_SRCS))
+RESIDENT_OBJECTS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(RESIDENT_SRCS))
+DESKTOP_OBJECTS := $(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(DESKTOP_SRCS))
+DESKTOP_SEAM_OBJECTS := \
+	$(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(DESKTOP_SEAM_SRCS))
+TRAP_BINDING_OBJECTS := \
+	$(patsubst src/bindings/original/%.c,\
+		$(TRAP_OBJ_DIR)/bindings/original/%.o,$(TRAP_BINDING_SRCS))
+
+GEMAES := $(BIN_DIR)/gemaes
+GEMDESK := $(BIN_DIR)/gemdesk
+LIBVDI := $(LIB_DIR)/libvdi.a
+LIBGEMTRAP := $(LIB_DIR)/libgemtrap.a
+ALL_OBJECTS := $(VDI_OBJECTS) $(VDI_ASM_OBJECTS) $(RESIDENT_OBJECTS) \
+	$(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) $(TRAP_BINDING_OBJECTS)
+ALL_SRCS := $(VDI_SRCS) $(VDI_ASM_SRCS) $(RESIDENT_SRCS) \
+	$(DESKTOP_SRCS) $(DESKTOP_SEAM_SRCS) $(TRAP_BINDING_SRCS)
+
+.PHONY: all audit source-audit asset-audit codegen-audit lineage-audit \
+	install clean
+
+all: $(GEMAES) $(GEMDESK)
+
+audit: source-audit asset-audit codegen-audit lineage-audit
+
+source-audit:
+	./scripts/check-xt-source.sh $(ALL_SRCS) \
+		src/include/*.h src/vdi/drivers/gem_pcvideo.h
+
+asset-audit:
+	cd assets && sha256sum -c SHA256SUMS
+
+codegen-audit: all
+	OBJDUMP=$(OBJDUMP) ./scripts/check-8086-codegen.sh $(ALL_OBJECTS)
+
+lineage-audit: $(GEMDESK)
+	CC='$(CC)' NM='$(NM)' \
+		CPPFLAGS='$(CPPFLAGS) -DGEM_TRAP_FAR_DATA=1' \
+		BINDINGS_CPPFLAGS='$(BINDINGS_CPPFLAGS)' \
+		./scripts/audit-original-desktop.sh \
+		$(MAP_DIR)/gemdesk.map \
+		docs/original-desktop-upstream-functions.manifest \
+		docs/original-desktop-target-boundaries.manifest
+
+$(LIBVDI): $(VDI_OBJECTS) $(VDI_ASM_OBJECTS)
+	@mkdir -p $(dir $@)
+	rm -f $@
+	$(AR) $(ARFLAGS) $@ $^
+
+$(LIBGEMTRAP): $(TRAP_BINDING_OBJECTS)
+	@mkdir -p $(dir $@)
+	rm -f $@
+	$(AR) $(ARFLAGS) $@ $^
+
+$(OBJ_DIR)/%.o: src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/%.o: src/%.S
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(TRAP_OBJ_DIR)/bindings/original/%.o: src/bindings/original/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(BINDINGS_CPPFLAGS) -DGEM_TRAP_FAR_DATA=1 \
+		$(CFLAGS) -c $< -o $@
+
+$(TRAP_OBJ_DIR)/%.o: src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -DGEM_TRAP_FAR_DATA=1 $(CFLAGS) -c $< -o $@
+
+$(DESKTOP_OBJECTS): $(wildcard src/aes/opengem/*.h) \
+	$(wildcard src/include/*.h)
+
+$(GEMAES): $(RESIDENT_OBJECTS) $(LIBVDI)
+	@mkdir -p $(dir $@) $(MAP_DIR)
+	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
+		-msegment-relocation-stuff -maout-stack=1024 -maout-heap=128 \
+		-Wl,--gc-sections -Wl,--icf=all \
+		-Wl,-Map,$(MAP_DIR)/gemaes.map -o $@ \
+		$(RESIDENT_OBJECTS) $(LIBVDI)
+	OBJDUMP86=$(OBJDUMP86) ./scripts/check-small-model.sh $@
+
+$(GEMDESK): $(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) $(LIBGEMTRAP)
+	@mkdir -p $(dir $@) $(MAP_DIR)
+	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
+		-msegment-relocation-stuff -maout-stack=2048 -maout-heap=12800 \
+		-Wl,--gc-sections -Wl,--icf=all \
+		-Wl,-Map,$(MAP_DIR)/gemdesk.map -o $@ \
+		$(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) $(LIBGEMTRAP)
+	OBJDUMP86=$(OBJDUMP86) ./scripts/check-small-model.sh $@
+
+install: all
+	install -d $(DESTDIR)/bin $(DESTDIR)/GEMAPPS/GEMSYS
+	install -m 755 $(GEMAES) $(DESTDIR)/bin/gemaes
+	install -m 755 $(GEMDESK) $(DESTDIR)/bin/gemdesk
+	install -m 644 assets/GEMAPPS/GEMSYS/* \
+		$(DESTDIR)/GEMAPPS/GEMSYS/
+
+clean:
+	rm -rf $(BUILD_DIR)

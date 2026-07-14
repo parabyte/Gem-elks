@@ -1,0 +1,19 @@
+GEM for ELKS provenance and copyright notice
+
+The FreeGEM/OpenGEM AES, VDI, Desktop, Pacific C bindings, and Desktop runtime
+assets retain their historical Digital Research and Caldera Thin Clients
+copyright notices.  Caldera released the identified FreeGEM source family
+under GNU GPL version 2.
+
+Copyright 2026 parabyte and elks-gem contributors for the ELKS port additions.
+Those additions are licensed under GNU GPL version 2 only, as is the combined
+work distributed by this repository.
+
+The active Desktop source and resources are derived from the pinned upstream
+materials documented in docs/PROVENANCE.md.  Filename case and line endings
+may be normalized where required by the ELKS build, but runtime RSC, ICN, and
+INF assets are retained byte for byte and checked by assets/SHA256SUMS.
+
+The DRI GEM Toolkit Clock sample and every source derived from it are excluded
+from this repository.  No ELKS kernel or libc source is vendored here; ELKS is
+an external build and runtime dependency with its own notices.
