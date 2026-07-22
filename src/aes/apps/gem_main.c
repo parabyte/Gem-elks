@@ -34,7 +34,6 @@
 #include "gem_vdi_resident.h"
 #include "gemtrap.h"
 
-#include <fcntl.h>
 
 #define GEM_SERVER_TICK_MS	20U
 #define GEM_SERVER_TICK_US	20000U
@@ -121,13 +120,19 @@ gem_server_reply(struct gemtrap_request *request)
 		(UWORD) sizeof(*request), TRUE);
 }
 
-/* Deliver every wait completed by the resident event core. */
+/*
+ * Deliver every wait completed by the resident event core.  *delivered is
+ * set TRUE when at least one completion was sent, so the serve loop can tell
+ * that an outstanding deferred event has now been answered.
+ */
 static WORD
-gem_server_flush_ready(VOID)
+gem_server_flush_ready(WORD *delivered)
 {
 	struct gemtrap_request done;
 
+	*delivered = FALSE;
 	while (gem_aes_resident_ready(&done)) {
+		*delivered = TRUE;
 		if (!gem_server_reply(&done))
 			return FALSE;
 	}
@@ -188,11 +193,12 @@ gem_server_spawn(UWORD *desktop_pid)
 	gem_server_request_fd = request_pipe[0];
 	gem_server_reply_fd = reply_pipe[1];
 	/*
-	 * The request pipe must be non-blocking: ELKS pipes have no select()
-	 * handler, so the serve loop drains with non-blocking reads and sleeps
-	 * on EAGAIN rather than trusting a readiness signal.
+	 * The request pipe stays blocking.  ELKS pipes have no select() handler,
+	 * but a blocking read is exactly what the serve loop wants while the
+	 * Desktop is drawing: it returns each request the instant it arrives,
+	 * with no per-call polling delay.  The 20 ms input tick is used only
+	 * while a deferred AES event is outstanding (see gem_server_serve).
 	 */
-	(void) fcntl(gem_server_request_fd, F_SETFL, O_NONBLOCK);
 	*desktop_pid = (UWORD) child;
 	return TRUE;
 }
@@ -218,15 +224,18 @@ gem_server_tick_sleep(VOID)
 }
 
 /*
- * Process one complete request record: VDI draws reply immediately; AES
- * calls may defer (their reply is delivered later by flush_ready once the
- * resident event core completes the wait).
+ * Process one complete request record.  VDI draws and ordinary AES calls
+ * reply immediately.  An EVNT_* wait defers: no reply is sent now, *deferred
+ * is set, and the reply is delivered later by flush_ready once the resident
+ * event core completes the wait.  Returns FALSE only on an unrecoverable
+ * reply-pipe error.
  */
 static WORD
-gem_server_dispatch(struct gemtrap_request *request)
+gem_server_dispatch(struct gemtrap_request *request, WORD *deferred)
 {
 	WORD result;
 
+	*deferred = FALSE;
 	if (request->cx == GEM_VDI_RESIDENT_SELECTOR) {
 		result = gem_vdi_resident_request(request,
 			gem_aes_resident_application(request));
@@ -239,57 +248,77 @@ gem_server_dispatch(struct gemtrap_request *request)
 		request->ax = (UWORD) result;
 		return gem_server_reply(request);
 	}
+	*deferred = TRUE;
 	return TRUE;
 }
 
 /*
- * Serve one Desktop lifetime.  The request pipe is non-blocking, so queued
- * requests are drained back-to-back with no per-request delay.  When no
- * request byte is available the server runs exactly one 20 ms resident
- * tick, which advances timers and input and completes any deferred wait.
- * Returns when the client closes its request pipe (read returns EOF).
+ * Block until one complete request record has been read.  ELKS pipes may
+ * return a short read, so partial records are accumulated.  Returns FALSE on
+ * EOF (Desktop exited) or an unexpected error.
+ */
+static WORD
+gem_server_read_record(struct gemtrap_request *request)
+{
+	UBYTE *dst;
+	UWORD need;
+	int got;
+
+	dst = (UBYTE *) request;
+	need = (UWORD) sizeof(*request);
+	while (need) {
+		got = read(gem_server_request_fd, dst, (int) need);
+		if (got == 0)
+			return FALSE;		/* Desktop closed the pipe. */
+		if (got < 0) {
+			if (errno == EINTR)
+				continue;
+			return FALSE;		/* Unexpected pipe error. */
+		}
+		dst += got;
+		need -= (UWORD) got;
+	}
+	return TRUE;
+}
+
+/*
+ * Serve one Desktop lifetime.
+ *
+ * While the Desktop is issuing AES/VDI calls it blocks for each reply, so a
+ * blocking read here returns the next request the instant it arrives and a
+ * full redraw of hundreds of primitives runs at pipe speed - no per-call
+ * delay.  The 20 ms input tick is used only while a deferred AES event
+ * (EVNT_MULTI and friends) is outstanding: then the Desktop sends nothing
+ * until the event completes, so the server polls resident input/timer state
+ * on that cadence until the wait is satisfied and returns to blocking reads.
+ *
+ * Returns when the Desktop closes its request pipe (read returns EOF).
  */
 static VOID
 gem_server_serve(VOID)
 {
-	static UBYTE record[sizeof(struct gemtrap_request)];
 	struct gemtrap_request request;
-	UWORD fill;
-	int got;
+	WORD pending;
+	WORD deferred;
+	WORD delivered;
 
-	fill = 0;
+	pending = FALSE;
 	for (;;) {
-		got = read(gem_server_request_fd, record + fill,
-			(int) (sizeof(record) - fill));
-		if (got == 0)
-			return;			/* Desktop closed the pipe. */
-		if (got > 0) {
-			fill += (UWORD) got;
-			if (fill < (UWORD) sizeof(record))
-				continue;	/* Await the rest of the record. */
-			fill = 0;
-			{
-				UBYTE *dst = (UBYTE *) &request;
-				const UBYTE *src = record;
-				UWORD n = (UWORD) sizeof(request);
-				while (n--)
-					*dst++ = *src++;
-			}
-			if (!gem_server_dispatch(&request))
+		if (!pending) {
+			if (!gem_server_read_record(&request))
 				return;
-			if (!gem_server_flush_ready())
+			if (!gem_server_dispatch(&request, &deferred))
 				return;
-			continue;
+			if (deferred)
+				pending = TRUE;
+		} else {
+			gem_server_tick_sleep();
+			gem_aes_resident_poll(GEM_SERVER_TICK_MS);
 		}
-		/* got < 0 */
-		if (errno == EINTR)
-			continue;
-		if (errno != EAGAIN && errno != EWOULDBLOCK)
-			return;			/* Unexpected pipe error. */
-		gem_server_tick_sleep();
-		gem_aes_resident_poll(GEM_SERVER_TICK_MS);
-		if (!gem_server_flush_ready())
+		if (!gem_server_flush_ready(&delivered))
 			return;
+		if (delivered)
+			pending = FALSE;
 	}
 }
 
