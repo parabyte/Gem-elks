@@ -11,7 +11,7 @@
 #ifndef ELKS_GEM_AES_RESIDENT_H
 #define ELKS_GEM_AES_RESIDENT_H
 
-#include <linuxmt/gemtrap.h>
+#include "gemtrap.h"
 
 #include "aes.h"
 
@@ -44,7 +44,7 @@ WORD gem_aes_resident_application(
  * means that the fixed completion queue is empty.
  */
 WORD gem_aes_resident_ready(struct gemtrap_request *request);
-WORD gem_aes_resident_exit(struct gemtrap_request *request);
+WORD gem_aes_resident_active(VOID);
 
 /*
  * Run one bounded event/input service pass in ordinary owner context.

@@ -32,7 +32,7 @@ CPPFLAGS += \
 	-DUNIX=1 \
 	-DI8086=1 \
 	-DNDEBUG=1 \
-	-DMULTIAPP=1 \
+	-DMULTIAPP=0 \
 	-DSMALL_DATA=1 \
 	-I src/include \
 	-I $(ELKS_ROOT)/libc/include \
@@ -40,10 +40,9 @@ CPPFLAGS += \
 
 BINDINGS_CPPFLAGS := \
 	-I src/bindings/original \
-	-DGEM_BINDINGS_ENABLE_DOS_PROCESS=1 \
 	-DUSER_INTIN=1
 
-OPTFLAGS ?= -O2
+OPTFLAGS ?= -Os
 EXTRA_CFLAGS := $(CFLAGS)
 override CFLAGS := \
 	$(OPTFLAGS) \
@@ -53,7 +52,7 @@ override CFLAGS := \
 	-march=i8086 \
 	-mtune=i8086 \
 	-msegment-relocation-stuff \
-	-fno-inline \
+	-mregparmcall \
 	-ffunction-sections \
 	-fdata-sections \
 	-fno-builtin-printf \
@@ -80,7 +79,6 @@ VDI_SRCS := \
 VDI_ASM_SRCS := src/vdi/drivers/gem_pcvideo_asm.S
 
 RESIDENT_SRCS := \
-	src/aes/apps/gemaes.c \
 	src/aes/gem_aes_resident.c \
 	src/aes/gem_event_resident.c \
 	src/aes/gem_form_resident.c \
@@ -95,7 +93,7 @@ RESIDENT_SRCS := \
 	src/aes/gem_window_resident.c \
 	src/aes/gem_far_resource_elks.c \
 	src/vdi/gem_vdi_resident.c \
-	src/aes/gem_proc_elks.c
+	src/aes/apps/gem_main.c
 
 DESKTOP_SRCS := \
 	src/aes/opengem/desktop.c \
@@ -127,6 +125,12 @@ DESKTOP_SEAM_SRCS := \
 	src/aes/gemdos_posix.c \
 	src/aes/gem_wordpair.c
 
+# Desktop-side pipe transport and client entry point, compiled with the
+# binding (far-data) profile.
+CLIENT_SRCS := \
+	src/bindings/gem_client.c \
+	src/aes/apps/gemdesk_main.c
+
 # Only binding units selected by the final Desktop link are retained here.
 TRAP_BINDING_SRCS := $(wildcard src/bindings/original/*.c)
 
@@ -136,23 +140,27 @@ RESIDENT_OBJECTS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(RESIDENT_SRCS))
 DESKTOP_OBJECTS := $(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(DESKTOP_SRCS))
 DESKTOP_SEAM_OBJECTS := \
 	$(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(DESKTOP_SEAM_SRCS))
+CLIENT_OBJECTS := \
+	$(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(CLIENT_SRCS))
 TRAP_BINDING_OBJECTS := \
 	$(patsubst src/bindings/original/%.c,\
 		$(TRAP_OBJ_DIR)/bindings/original/%.o,$(TRAP_BINDING_SRCS))
 
-GEMAES := $(BIN_DIR)/gemaes
+GEM := $(BIN_DIR)/gem
 GEMDESK := $(BIN_DIR)/gemdesk
 LIBVDI := $(LIB_DIR)/libvdi.a
 LIBGEMTRAP := $(LIB_DIR)/libgemtrap.a
 ALL_OBJECTS := $(VDI_OBJECTS) $(VDI_ASM_OBJECTS) $(RESIDENT_OBJECTS) \
-	$(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) $(TRAP_BINDING_OBJECTS)
+	$(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) $(CLIENT_OBJECTS) \
+	$(TRAP_BINDING_OBJECTS)
 ALL_SRCS := $(VDI_SRCS) $(VDI_ASM_SRCS) $(RESIDENT_SRCS) \
-	$(DESKTOP_SRCS) $(DESKTOP_SEAM_SRCS) $(TRAP_BINDING_SRCS)
+	$(DESKTOP_SRCS) $(DESKTOP_SEAM_SRCS) $(CLIENT_SRCS) \
+	$(TRAP_BINDING_SRCS)
 
 .PHONY: all audit source-audit asset-audit codegen-audit lineage-audit \
 	install clean
 
-all: $(GEMAES) $(GEMDESK)
+all: $(GEM) $(GEMDESK)
 
 audit: source-audit asset-audit codegen-audit lineage-audit
 
@@ -171,7 +179,7 @@ lineage-audit: $(GEMDESK)
 		CPPFLAGS='$(CPPFLAGS) -DGEM_TRAP_FAR_DATA=1' \
 		BINDINGS_CPPFLAGS='$(BINDINGS_CPPFLAGS)' \
 		./scripts/audit-original-desktop.sh \
-		$(MAP_DIR)/gemdesk.map \
+		$(MAP_DIR)/gem.map \
 		docs/original-desktop-upstream-functions.manifest \
 		docs/original-desktop-target-boundaries.manifest
 
@@ -196,38 +204,46 @@ $(OBJ_DIR)/%.o: src/%.S
 $(TRAP_OBJ_DIR)/bindings/original/%.o: src/bindings/original/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(BINDINGS_CPPFLAGS) -DGEM_TRAP_FAR_DATA=1 \
-		$(CFLAGS) -c $< -o $@
+		-DGEM_DIRECT=1 $(CFLAGS) -c $< -o $@
 
 $(TRAP_OBJ_DIR)/%.o: src/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) -DGEM_TRAP_FAR_DATA=1 $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) -DGEM_TRAP_FAR_DATA=1 -DGEM_DIRECT=1 \
+		$(CFLAGS) -c $< -o $@
 
 $(DESKTOP_OBJECTS): $(wildcard src/aes/opengem/*.h) \
 	$(wildcard src/include/*.h)
 
-$(GEMAES): $(RESIDENT_OBJECTS) $(LIBVDI)
+$(GEM): $(RESIDENT_OBJECTS) $(LIBVDI)
 	@mkdir -p $(dir $@) $(MAP_DIR)
 	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
-		-msegment-relocation-stuff -maout-stack=1024 -maout-heap=128 \
+		-msegment-relocation-stuff -mregparmcall \
+		-maout-stack=2048 -maout-heap=4096 \
 		-Wl,--gc-sections -Wl,--icf=all \
-		-Wl,-Map,$(MAP_DIR)/gemaes.map -o $@ \
+		-Wl,-Map,$(MAP_DIR)/gem.map -o $@ \
 		$(RESIDENT_OBJECTS) $(LIBVDI)
 	OBJDUMP86=$(OBJDUMP86) ./scripts/check-small-model.sh $@
 
-$(GEMDESK): $(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) $(LIBGEMTRAP)
+$(GEMDESK): $(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) $(CLIENT_OBJECTS) \
+		$(LIBGEMTRAP)
 	@mkdir -p $(dir $@) $(MAP_DIR)
 	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
-		-msegment-relocation-stuff -maout-stack=2048 -maout-heap=12800 \
+		-msegment-relocation-stuff -mregparmcall \
+		-maout-stack=2048 -maout-heap=12800 \
 		-Wl,--gc-sections -Wl,--icf=all \
 		-Wl,-Map,$(MAP_DIR)/gemdesk.map -o $@ \
-		$(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) $(LIBGEMTRAP)
+		$(CLIENT_OBJECTS) $(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) \
+		$(LIBGEMTRAP)
 	OBJDUMP86=$(OBJDUMP86) ./scripts/check-small-model.sh $@
 
 install: all
-	install -d $(DESTDIR)/bin $(DESTDIR)/GEMAPPS/GEMSYS
-	install -m 755 $(GEMAES) $(DESTDIR)/bin/gemaes
+	install -d $(DESTDIR)/bin $(DESTDIR)/etc $(DESTDIR)/GEMAPPS/GEMSYS
+	install -m 755 $(GEM) $(DESTDIR)/bin/gem
 	install -m 755 $(GEMDESK) $(DESTDIR)/bin/gemdesk
-	install -m 644 assets/GEMAPPS/GEMSYS/* \
+	install -m 644 assets/GEMAPPS/GEMSYS/DESKTOP.INF $(DESTDIR)/etc/DESKTOP.INF
+	install -m 644 assets/GEMAPPS/GEMSYS/DESKTOP.RSC \
+		assets/GEMAPPS/GEMSYS/DESKHI.ICN \
+		assets/GEMAPPS/GEMSYS/DESKLO.ICN \
 		$(DESTDIR)/GEMAPPS/GEMSYS/
 
 clean:

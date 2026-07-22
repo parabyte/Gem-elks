@@ -55,7 +55,7 @@ MLOCAL BYTE FAR elks_alert_assets[] ELKS_FAR_ALERT =
 	"configured POSIX search path.][Cancel]";
 MLOCAL BYTE FAR elks_alert_save_config[] ELKS_FAR_ALERT =
 	"[3][The Desktop configuration could not be|"
-	"saved to /GEMAPPS/GEMSYS/DESKTOP.INF.][Retry|Cancel]";
+	"saved to /etc/DESKTOP.INF.][Retry|Cancel]";
 MLOCAL BYTE FAR elks_alert_exit[] ELKS_FAR_ALERT =
 	"[1][This will close the GEM Desktop and all|"
 	"running applications.][ OK |Cancel]";

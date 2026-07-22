@@ -15,7 +15,7 @@
  * fmemalloc() interface accepts a wider byte scalar and constructs its far
  * pointer with wider arithmetic, neither of which is needed here.
  */
-extern int _fmemalloc(int paragraphs, unsigned short *segment);
+extern int _fmemalloc(unsigned int paragraphs, unsigned short *segment);
 extern int _fmemfree(unsigned short segment);
 
 #define GEM_FAR_PARAGRAPH_MASK 15U

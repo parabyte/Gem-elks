@@ -13,6 +13,14 @@
 WORD GEMAIN(WORD argc, BYTE *argv[]);
 
 /*
+ * The stock-ELKS direct-linked build supplies its own single-executable
+ * entry point in gem_main.c; the broker-era client main() below waited for
+ * a kernel INT EF signature which no longer exists.  Only the mkfs format
+ * seam at the end of this file is used by that build.
+ */
+#ifndef GEM_DIRECT
+
+/*
  * ELKS select(2) retains a timeval made from two historical four-byte
  * fields.  Keep that wire layout isolated here as low/high word pairs so the
  * Desktop never imports libc sleep(), time_t arithmetic, or 32-bit helper
@@ -64,6 +72,8 @@ main(int argc, char **argv)
 		gemdesk_owner_pause();
 	return GEMAIN((WORD) argc, (BYTE **) argv);
 }
+
+#endif /* !GEM_DIRECT */
 
 /*
  * Create a native MINIX file system on one real floppy device and wait for

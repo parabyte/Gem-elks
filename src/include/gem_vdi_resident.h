@@ -9,7 +9,7 @@
 #ifndef ELKS_GEM_VDI_RESIDENT_H
 #define ELKS_GEM_VDI_RESIDENT_H
 
-#include <linuxmt/gemtrap.h>
+#include "gemtrap.h"
 
 #include "aes.h"
 #include "gem_bindings_elks.h"
@@ -87,5 +87,13 @@ WORD gem_vdi_resident_request(struct gemtrap_request *request,
 	WORD application);
 VOID gem_vdi_resident_release(WORD application);
 VOID gem_vdi_resident_shutdown(VOID);
+
+/*
+ * Release and reacquire the physical adapter and input devices around one
+ * synchronous full-screen child launch.  Client workstation records are
+ * preserved; the caller drives the redraw cascade after resume.
+ */
+WORD gem_vdi_resident_suspend(VOID);
+WORD gem_vdi_resident_resume(VOID);
 
 #endif /* ELKS_GEM_VDI_RESIDENT_H */

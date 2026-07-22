@@ -1,62 +1,89 @@
 # GEM for ELKS
 
-This repository contains a native FreeGEM/OpenGEM Desktop port for ELKS on
-IBM PC/XT-class 8088 and 8086 systems.  It builds two ELKS executables:
+This repository contains a native FreeGEM/OpenGEM Desktop port for **stock
+ELKS** on IBM PC/XT-class 8088 and 8086 systems.  It requires **no kernel
+modification of any kind**: no new system calls, no interrupt broker, no
+kernel config options, no patches.  It builds two ordinary ELKS
+executables:
 
-- `gemaes`, the resident AES/VDI owner; and
-- `gemdesk`, the original GEM Desktop client with narrow ELKS/POSIX seams.
+- `gem`, the AES/VDI server and single-tasking shell; and
+- `gemdesk`, the original GEM Desktop client, started automatically by
+  `gem`.
 
-The Desktop reads the original `DESKTOP.RSC`, `DESKHI.ICN`, `DESKLO.ICN`, and
-`DESKTOP.INF` files directly.  There is no resource conversion step, hosted UI
-layer, DOS command shell, or runtime compatibility wrapper.  GEM applications
-use the native 8086 `INT EFh` array ABI supplied by the ELKS GEM broker.
+## Architecture
+
+Following upstream ELKS guidance, the AES/VDI owner is an ordinary user
+process.  `gem` owns the screen and input devices, spawns the Desktop with
+two ordinary kernel pipes on file descriptors 3 and 4, and serves the
+original 22-byte INT EF register records the client writes.  On a real-mode
+machine the resident AES/VDI reads and writes the client's memory directly
+through the recorded segment words, so nothing is copied or converted in
+between.
+
+- A blocking pipe read replaces the kernel INT EF wait.
+- A 20 ms `select()` timeout replaces the SIGALRM input tick, so no signal
+  handler exists anywhere (and no medium-model signal delivery is needed).
+- A closed pipe replaces the kernel EXIT record.
+
+The ELKS kernel owns everything it normally owns:
+
+- **Processes.**  The GEM/XM logical process table, DOS arena records, and
+  channel bookkeeping are gone.  Program launch is original single-tasking
+  GEM: `SHEL_WRITE` records the command, the Desktop exits, and `gem` runs
+  the program with plain `vfork`/`execv`/`waitpid` on the restored text
+  console, then starts a fresh Desktop.
+- **Memory.**  `dos_alloc`/`dos_free` are direct `malloc`/`free`; far
+  resource segments come from the stock `_fmemalloc` system call.
+- **Filesystem.**  Every `dos_*` call reaches its ELKS system call
+  directly (`open`, `read`, `write`, `mkdir`, `rename`,
+  `opendir`/`readdir`, ...).  The emulated INT 21 register machine
+  (`__DOS()`) has been removed.
+
+## Configuration
+
+GEM configuration lives in the standard ELKS `/etc` directory:
+`/etc/DESKTOP.INF` is read at startup and rewritten by "Save Desktop".
+The remaining original assets (`DESKTOP.RSC`, `DESKHI.ICN`, `DESKLO.ICN`)
+are resources, not configuration, and stay in `/GEMAPPS/GEMSYS`.
 
 ## Build
 
-Use an ELKS tree with its GNU ia16 toolchain already built:
+Use a stock ELKS tree with its GNU ia16 toolchain already built:
 
 ```sh
-make -f Makefile.elks ELKS_ROOT=/path/to/elks -j2
+make -f Makefile.elks ELKS_ROOT=/path/to/elks -j8
 make -f Makefile.elks ELKS_ROOT=/path/to/elks audit
 ```
 
 The build produces:
 
 ```text
-build/bin/gemaes
+build/bin/gem
 build/bin/gemdesk
 ```
 
-`make audit` verifies source constraints, the original asset hashes, the ELKS
-memory model, 8086-only code generation, absence of compiler-generated wide
-arithmetic, duplicate strong symbols, and the measured original-GEM lineage.
-See [BUILDING.md](BUILDING.md) for the toolchain and installation details.
+`make install DESTDIR=...` installs `/bin/gem`, `/bin/gemdesk`,
+`/etc/DESKTOP.INF`, and the `/GEMAPPS/GEMSYS` resources.  See
+[BUILDING.md](BUILDING.md) and
+[docs/ELKS-INTEGRATION.md](docs/ELKS-INTEGRATION.md) for adding GEM to ELKS
+disk images as an optional external application.
 
-## Runtime layout
+## Run
 
-Install the two programs in `/bin` and the four assets in
-`/GEMAPPS/GEMSYS`.  Start `/bin/gemaes` before `/bin/gemdesk`.  The ELKS kernel
-must provide the GEM trap broker and task-owned graphics access; the official
-ELKS integration keeps the package disabled unless that kernel support is
-selected.
+```sh
+/bin/gem
+```
 
-The runtime uses ELKS kernel tasks, address spaces, `vfork`/`exec`, signals,
-and file descriptors for process and memory ownership.  Desktop file commands
-map directly to bounded POSIX system calls.  All target-side arithmetic uses
-8-bit or 16-bit values and explicit word pairs at unavoidable ABI boundaries;
-no floating point or 32-bit C arithmetic is used.
+`gem` starts the Desktop itself.  Quitting the Desktop returns to the
+shell; launching a program suspends graphics, runs it full screen, and
+returns to a fresh Desktop, exactly like single-tasking GEM on DOS.
 
 ## Scope
 
-This clean core release deliberately contains no ELKS vendor tree, disk image,
-generated binary, bulk reference-source snapshot, or DRI Toolkit Clock-derived
-code.  It contains only the source and original runtime assets needed for the
-native AES owner and Desktop client.
-
-The measured core lineage is 91.35% original or direct-derived GEM source after
-excluding only the three explicit ELKS/POSIX boundary modules.  The complete
-client metric, which includes those unavoidable boundaries, is also reported
-by the reproducible audit.  See [docs/LINEAGE.md](docs/LINEAGE.md).
+This release deliberately contains no ELKS vendor tree, kernel patch, disk
+image, generated binary, or DRI Toolkit Clock-derived code.  It contains
+only the source and original runtime assets needed for the AES/VDI server
+and the original Desktop client.  See [docs/LINEAGE.md](docs/LINEAGE.md).
 
 ## License
 

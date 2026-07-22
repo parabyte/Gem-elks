@@ -12,7 +12,7 @@
 #ifndef ELKS_GEM_RESIDENT_MEMORY_H
 #define ELKS_GEM_RESIDENT_MEMORY_H
 
-#include <linuxmt/gemtrap.h>
+#include "gemtrap.h"
 
 #include "gem_bindings_elks.h"
 

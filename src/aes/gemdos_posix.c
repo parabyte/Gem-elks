@@ -43,7 +43,6 @@
 #define GEM_MOUNT_NAME_MAX 32
 #define GEM_VOLUME_LABEL_MAX 11
 #define DOS_HEAP_BYTES 0x3000U
-#define DOS_HEAP_SLOTS 8
 
 typedef struct gem_search {
 	WORD used;
@@ -65,11 +64,6 @@ typedef struct dos_stat_view {
 	UWORD time;
 	UWORD date;
 } DOS_STAT_VIEW;
-
-typedef struct dos_heap_entry {
-	LPVOID address;
-	UWORD size;
-} DOS_HEAP_ENTRY;
 
 /*
  * Filesystem quantities cross the ELKS ustatfs ABI as four-byte fields.
@@ -171,35 +165,17 @@ union REGS DR;
 WORD DOS_ERR;
 
 /*
- * Register names deliberately match GEMDOS.C.  Pointer values remain near:
- * one ELKS process cannot dereference another process data segment, and this
- * executable uses SMALL_DATA.  The segment words are retained only to keep
- * the original public ABI image exact.
+ * DOS_AX keeps its original GEMDOS.C meaning as the last error/status word
+ * the Desktop inspects through form_error() and friends.  Every other
+ * emulated DOS register is gone: each public call below reaches the ELKS
+ * system call directly with its real C arguments.
  */
 #define DOS_AX DR.x.ax
-#define DOS_BX DR.x.bx
-#define DOS_CX DR.x.cx
-#define DOS_DX DR.x.dx
-#define DOS_SI DR.x.si
-#define DOS_DI DR.x.di
-#define DOS_DS dos_ds
-#define DOS_ES dos_es
 
 static LPVOID current_dta;
 static FCB fallback_dta;
 static GEM_SEARCH searches[GEM_MAX_SEARCHES];
-static DOS_HEAP_ENTRY dos_heap_entries[DOS_HEAP_SLOTS];
-static UWORD dos_heap_used;
 static UWORD dos_current_drive;
-static UWORD dos_ds;
-static UWORD dos_es;
-static LPVOID dos_ds_pointer;
-static LPVOID dos_es_pointer;
-static LPVOID dos_result_pointer;
-static GEM_U32_WORDS dos_transfer_words;
-static GEM_U32_WORDS dos_space_total;
-static GEM_U32_WORDS dos_space_available;
-static WORD dos_heap_query;
 
 /*
  * GEMDOS sets a file's packed date/time by open handle, while ELKS utime()
@@ -271,60 +247,6 @@ dos_finish_syscall(WORD result)
 		dos_set_error(0);
 		DOS_AX = (UWORD) result;
 	}
-}
-
-/*
- * libc malloc grows the ELKS data segment with sbrk/brk.  This eight-entry
- * ledger enforces the Desktop's historical 12 KiB payload ceiling and lets
- * dos_free reject foreign pointers.  Requests round upward to two bytes;
- * 0xffff is rejected before the addition can wrap.
- */
-static LPVOID
-dos_heap_alloc(UWORD requested)
-{
-	DOS_HEAP_ENTRY *entry;
-	LPVOID address;
-
-	if (!requested)
-		requested = 1;
-	if (requested == 0xffffU)
-		return NULL;
-	requested = (requested + 1U) & 0xfffeU;
-	if (requested > DOS_HEAP_BYTES - dos_heap_used)
-		return NULL;
-	for (entry = &dos_heap_entries[0];
-	     entry < &dos_heap_entries[DOS_HEAP_SLOTS] && entry->address;
-	     entry++)
-		;
-	if (entry == &dos_heap_entries[DOS_HEAP_SLOTS])
-		return NULL;
-	address = malloc(requested);
-	if (!address)
-		return NULL;
-	entry->address = address;
-	entry->size = requested;
-	dos_heap_used += requested;
-	return address;
-}
-
-static WORD
-dos_heap_free(LPVOID address)
-{
-	DOS_HEAP_ENTRY *entry;
-
-	if (!address)
-		return TRUE;
-	for (entry = &dos_heap_entries[0];
-	     entry < &dos_heap_entries[DOS_HEAP_SLOTS]
-	     && entry->address != address; entry++)
-		;
-	if (entry == &dos_heap_entries[DOS_HEAP_SLOTS])
-		return FALSE;
-	dos_heap_used -= entry->size;
-	entry->address = NULL;
-	entry->size = 0;
-	free(address);
-	return TRUE;
 }
 
 /* Copy a NUL-terminated component without silent truncation. */
@@ -1090,7 +1012,8 @@ dos_search_first(LPBYTE specification, WORD attr)
  * touched only at the libc boundary.
  */
 static WORD
-dos_path_syscall(UWORD function)
+dos_path_syscall(UWORD function, const char *source, const char *newname,
+		 UWORD *attr)
 {
 	char path[PATH_MAX];
 	char newpath[PATH_MAX];
@@ -1100,9 +1023,8 @@ dos_path_syscall(UWORD function)
 	WORD flags;
 	WORD result;
 
-	if (!dos_ds_pointer || !*(LPBYTE) dos_ds_pointer
-	    || !dos_copy_text(path, (UWORD) sizeof(path),
-			      (const char *) dos_ds_pointer)) {
+	if (!source || !*source
+	    || !dos_copy_text(path, (UWORD) sizeof(path), source)) {
 		errno = ENOENT;
 		return FAILURE;
 	}
@@ -1114,16 +1036,16 @@ dos_path_syscall(UWORD function)
 	case 0x3b00:
 		return (WORD) chdir(path);
 	case 0x3c00:
-		if (DOS_CX & (F_SYSTEM | F_VOLUME | F_SUBDIR)) {
+		if (*attr & (F_SYSTEM | F_VOLUME | F_SUBDIR)) {
 			errno = EACCES;
 			return FAILURE;
 		}
-		if ((DOS_CX & F_HIDDEN)
+		if ((*attr & F_HIDDEN)
 		    && dos_path_basename(path)[0] != '.') {
 			errno = EACCES;
 			return FAILURE;
 		}
-		mode = (DOS_CX & F_RDONLY) ? 0444U : 0666U;
+		mode = (*attr & F_RDONLY) ? 0444U : 0666U;
 		result = (WORD) open(path, O_CREAT | O_TRUNC | O_RDWR,
 				     (mode_t) mode);
 		if (result >= 0) {
@@ -1166,26 +1088,26 @@ dos_path_syscall(UWORD function)
 			return FAILURE;
 		mode = (UWORD) native.st_mode;
 		if ((function & 0x00ffU) == F_GETMOD) {
-			DOS_CX = dos_file_attr(path, mode);
+			*attr = dos_file_attr(path, mode);
 			return 0;
 		}
 		current_attr = dos_file_attr(path, mode);
-		if (((UBYTE) DOS_CX & (F_HIDDEN | F_SYSTEM | F_SUBDIR
+		if (((UBYTE) *attr & (F_HIDDEN | F_SYSTEM | F_SUBDIR
 					 | F_ARCHIVE))
 		    != (current_attr & (F_HIDDEN | F_SYSTEM | F_SUBDIR
 					   | F_ARCHIVE))) {
 			errno = EACCES;
 			return FAILURE;
 		}
-		if (DOS_CX & F_RDONLY)
+		if (*attr & F_RDONLY)
 			mode &= (UWORD) ~(S_IWUSR | S_IWGRP | S_IWOTH);
 		else
 			mode |= S_IWUSR;
 		return (WORD) chmod(path, (mode_t) mode);
 	case 0x5600:
-		if (!dos_es_pointer || !*(LPBYTE) dos_es_pointer
+		if (!newname || !*newname
 		    || !dos_copy_text(newpath, (UWORD) sizeof(newpath),
-				   (const char *) dos_es_pointer)) {
+				   newname)) {
 			errno = ENOENT;
 			return FAILURE;
 		}
@@ -1250,7 +1172,7 @@ typedef union dos_seek_boundary {
 } DOS_SEEK_BOUNDARY;
 
 static GEM_U32_WORDS
-dos_seek(WORD handle, UWORD function)
+dos_seek(WORD handle, UWORD smode, GEM_U32_WORDS offset)
 {
 	DOS_SEEK_BOUNDARY input;
 	DOS_SEEK_BOUNDARY output;
@@ -1260,12 +1182,11 @@ dos_seek(WORD handle, UWORD function)
 	UWORD index;
 #endif
 
-	memset(&input, (DOS_CX & 0x8000U) ? 0xff : 0, sizeof(input));
-	input.words.lo = DOS_DX;
-	input.words.hi = DOS_CX;
+	memset(&input, (offset.hi & 0x8000U) ? 0xff : 0, sizeof(input));
+	input.words = offset;
 	errno = 0;
 	output.native = lseek(handle, input.native,
-			      (WORD) (function & 0x00ffU));
+			      (WORD) (smode & 0x00ffU));
 	if (errno) {
 		dos_set_error(dos_error_from_errno(errno));
 		result.lo = result.hi = 0xffffU;
@@ -1285,439 +1206,289 @@ dos_seek(WORD handle, UWORD function)
 }
 
 /*
- * One compact replacement for GEMDOSIF.A86 __DOS.  The public routines below
- * still prepare the exact classic registers.  This switch performs the ELKS
- * operation directly; there is no duplicate native wrapper layer.
+ * Direct FreeGEM GEMDOS.C wrapper logic begins here.  Every call reaches
+ * its ELKS system call or bounded helper immediately: there is no emulated
+ * INT 21 register set, dispatcher, or duplicate native layer in between.
  */
-static VOID
-__DOS(VOID)
-{
-	UWORD function;
-	WORD result;
-	int status;
-
-	function = DOS_AX;
-	switch (function & 0xff00U) {
-	case 0x0e00:
-		/*
-		 * Retain a valid A..Z compatibility selector, but every selector
-		 * addresses the same POSIX namespace.  No drive prefix is ever
-		 * inserted into a native pathname.
-		 */
-		if (DOS_DX < 26U) {
-			dos_current_drive = DOS_DX;
-			dos_set_error(0);
-			DOS_AX = TRUE;
-		} else
-			dos_set_error(E_BADDRIVE);
-		break;
-	case 0x1100:
-		(void) dos_fcb_volume_first((const UBYTE *) dos_ds_pointer);
-		break;
-	case 0x1900:
-		dos_set_error(0);
-		DOS_AX = dos_current_drive;
-		break;
-	case 0x1a00:
-		current_dta = dos_ds_pointer;
-		dos_set_error(0);
-		break;
-	case 0x3600:
-		dos_space_total = dos_zero_words;
-		dos_space_available = dos_zero_words;
-		if (DOS_DX > 26U)
-			dos_set_error(E_BADDRIVE);
-		else if (!dos_filesystem_space(&dos_space_total,
-					       &dos_space_available))
-			dos_set_error(dos_error_from_errno(errno));
-		else
-			dos_set_error(0);
-		break;
-	case 0x3900:
-	case 0x3a00:
-	case 0x3b00:
-	case 0x3c00:
-	case 0x3d00:
-	case 0x4100:
-	case 0x4300:
-	case 0x5600:
-		dos_finish_syscall(dos_path_syscall(function));
-		break;
-	case 0x3e00:
-		result = (WORD) close((WORD) DOS_BX);
-		if (!result && (WORD) DOS_BX == dos_path_handle) {
-			dos_path_handle = FAILURE;
-			dos_handle_path[0] = '\0';
-		}
-		dos_finish_syscall(result);
-		break;
-	case 0x3f00:
-	case 0x4000:
-		dos_transfer_words = dos_zero_words;
-		dos_transfer_words.lo = dos_io((WORD) DOS_BX, DOS_CX,
-					   dos_ds_pointer,
-					   function == 0x4000U);
-		if (!DOS_ERR)
-			DOS_AX = dos_transfer_words.lo;
-		break;
-	case 0x4200:
-		dos_transfer_words = dos_seek((WORD) DOS_BX, function);
-		if (!DOS_ERR) {
-			DOS_AX = dos_transfer_words.lo;
-			DOS_DX = dos_transfer_words.hi;
-		}
-		break;
-	case 0x4700:
-		if (DOS_DX > 26U) {
-			errno = ENODEV;
-			result = FAILURE;
-		} else if (!dos_ds_pointer) {
-			errno = EFAULT;
-			result = FAILURE;
-		} else
-			result = getcwd((char *) dos_ds_pointer, GEM_GDIR_MAX)
-				? 0 : FAILURE;
-		dos_finish_syscall(result);
-		break;
-	case 0x4800:
-		if (dos_heap_query) {
-			dos_transfer_words = dos_zero_words;
-			dos_transfer_words.lo = DOS_HEAP_BYTES - dos_heap_used;
-			DOS_BX = dos_transfer_words.lo;
-			dos_set_error(0);
-			break;
-		}
-		dos_result_pointer = dos_heap_alloc(dos_transfer_words.lo);
-		if (!dos_result_pointer)
-			dos_set_error(E_NOMEMORY);
-		else {
-			dos_set_error(0);
-			DOS_AX = (UWORD) FP_OFF(dos_result_pointer);
-		}
-		break;
-	case 0x4900:
-		if (!dos_heap_free(dos_es_pointer))
-			dos_set_error(E_BADMEMBLK);
-		else
-			dos_set_error(0);
-		break;
-	case 0x4d00:
-		do {
-			result = (WORD) wait(&status);
-		} while (result < 0 && errno == EINTR);
-		if (result < 0)
-			dos_finish_syscall(result);
-		else {
-			dos_set_error(0);
-			DOS_AX = (UWORD) status;
-		}
-		break;
-	case 0x4e00:
-		dos_search_first((LPBYTE) dos_ds_pointer, (WORD) DOS_CX);
-		break;
-	case 0x4f00:
-		dos_search_next(dos_search_slot(current_dta, FALSE));
-		break;
-	case 0x5700:
-		if ((function & 0x00ffU) == 0U) {
-			result = dos_get_handle_clock((WORD) DOS_BX,
-						      &DOS_CX, &DOS_DX);
-			if (result < 0)
-				dos_finish_syscall(result);
-			else
-				dos_set_error(0);
-		} else if ((function & 0x00ffU) == 1U)
-			dos_finish_syscall(dos_set_handle_clock((WORD) DOS_BX,
-							  DOS_CX, DOS_DX));
-		else
-			dos_set_error(E_BADFUNC);
-		break;
-	default:
-		dos_set_error(E_BADFUNC);
-		break;
-	}
-}
-
-/*
- * Direct FreeGEM GEMDOS.C wrapper logic begins here.  Pointer arguments keep
- * the original low/high register image, while dos_ds_pointer and
- * dos_es_pointer retain the usable near pointer for the ELKS syscall seam.
- */
-VOID
-dos_func(UWORD ax, UWORD lodsdx, UWORD hidsdx)
-{
-	DOS_AX = ax;
-	DOS_DX = lodsdx;
-	DOS_DS = hidsdx;
-	dos_ds_pointer = gem_near_words_pointer(
-		gem_u32_words(lodsdx, hidsdx));
-
-	__DOS();
-}
-
-/* Exported because the direct-derived Desktop volume-label code also uses it. */
-VOID
-dos_lpvoid(UWORD ax, LPVOID ptr)
-{
-	dos_func(ax, (UWORD) FP_OFF(ptr), (UWORD) FP_SEG(ptr));
-}
-
 WORD
 dos_chdir(LPBYTE pdrvpath)
 {
-	dos_lpvoid(0x3b00, pdrvpath);
+	dos_finish_syscall(dos_path_syscall(0x3b00U,
+		(const char *) pdrvpath, (const char *) 0, (UWORD *) 0));
 	return !DOS_ERR;
 }
 
 WORD
 dos_gdir(WORD drive, LPBYTE pdrvpath)
 {
-	DOS_AX = 0x4700;
-	DOS_DX = (UWORD) drive;
-	DOS_SI = (UWORD) FP_OFF(pdrvpath);
-	DOS_DS = (UWORD) FP_SEG(pdrvpath);
-	dos_ds_pointer = pdrvpath;
+	WORD result;
 
-	__DOS();
-
+	if ((UWORD) drive > 26U) {
+		errno = ENODEV;
+		result = FAILURE;
+	} else if (!pdrvpath) {
+		errno = EFAULT;
+		result = FAILURE;
+	} else
+		result = getcwd((char *) pdrvpath, GEM_GDIR_MAX)
+			? 0 : FAILURE;
+	dos_finish_syscall(result);
 	return !DOS_ERR;
 }
 
 WORD
 dos_gdrv(VOID)
 {
-	DOS_AX = 0x1900;
-
-	__DOS();
-	return DOS_AX & 0x00ffU;
+	dos_set_error(0);
+	return (WORD) (dos_current_drive & 0x00ffU);
 }
 
 WORD
 dos_sdrv(WORD newdrv)
 {
-	DOS_AX = 0x0e00;
-	DOS_DX = (UWORD) newdrv;
+	/*
+	 * Exactly one compatibility letter names the single POSIX filesystem;
+	 * this word is Desktop presentation state, not a mount operation.
+	 */
+	if ((UWORD) newdrv < 26U) {
+		dos_current_drive = (UWORD) newdrv;
+		dos_set_error(0);
+	} else
+		dos_set_error(E_BADDRIVE);
+	return !DOS_ERR;
+}
 
-	__DOS();
-
-	return DOS_AX & 0x00ffU;
+WORD
+dos_vlabel(LPVOID fcb)
+{
+	(void) dos_fcb_volume_first((const UBYTE *) fcb);
+	return !DOS_ERR;
 }
 
 WORD
 dos_sdta(LPVOID ldta)
 {
-	dos_lpvoid(0x1a00, ldta);
-	return !DOS_ERR;
+	current_dta = ldta;
+	dos_set_error(0);
+	return TRUE;
 }
 
 WORD
 dos_sfirst(LPBYTE pspec, WORD attr)
 {
-	DOS_CX = (UWORD) attr;
-
-	dos_lpvoid(0x4e00, pspec);
+	(void) dos_search_first(pspec, attr);
 	return !DOS_ERR;
 }
 
 WORD
 dos_snext(VOID)
 {
-	DOS_AX = 0x4f00;
-
-	__DOS();
-
+	(void) dos_search_next(dos_search_slot(current_dta, FALSE));
 	return !DOS_ERR;
 }
 
 WORD
 dos_create(LPBYTE pname, WORD attr)
 {
-	DOS_CX = (UWORD) attr;
-	dos_lpvoid(0x3c00, pname);
+	UWORD attr_word;
 
+	attr_word = (UWORD) attr;
+	dos_finish_syscall(dos_path_syscall(0x3c00U,
+		(const char *) pname, (const char *) 0, &attr_word));
 	return (WORD) DOS_AX;
 }
 
 WORD
 dos_open(LPBYTE pname, WORD access)
 {
-	dos_lpvoid((UWORD) (0x3d00 + access), pname);
-
+	dos_finish_syscall(dos_path_syscall((UWORD) (0x3d00 + access),
+		(const char *) pname, (const char *) 0, (UWORD *) 0));
 	return (WORD) DOS_AX;
 }
 
 WORD
 dos_close(WORD handle)
 {
-	DOS_AX = 0x3e00;
-	DOS_BX = (UWORD) handle;
+	WORD result;
 
-	__DOS();
-
+	result = (WORD) close(handle);
+	if (!result && handle == dos_path_handle) {
+		dos_path_handle = FAILURE;
+		dos_handle_path[0] = '\0';
+	}
+	dos_finish_syscall(result);
 	return !DOS_ERR;
 }
 
 WORD
 dos_delete(LPBYTE ppath)
 {
-	dos_lpvoid(0x4100, ppath);
+	dos_finish_syscall(dos_path_syscall(0x4100U,
+		(const char *) ppath, (const char *) 0, (UWORD *) 0));
 	return !DOS_ERR;
 }
 
 GEM_U32_WORDS
 dos_read(WORD handle, GEM_U32_WORDS cnt, LPBYTE pbuffer)
 {
+	GEM_U32_WORDS moved;
+
+	moved = dos_zero_words;
 	if (cnt.hi) {
 		dos_set_error(E_BADDATA);
-		return dos_zero_words;
+		return moved;
 	}
-	DOS_CX = cnt.lo;
-	DOS_BX = (UWORD) handle;
-	dos_lpvoid(0x3f00, pbuffer);
-	return dos_transfer_words;
+	moved.lo = dos_io(handle, cnt.lo, pbuffer, FALSE);
+	return moved;
 }
 
 GEM_U32_WORDS
 dos_write(WORD handle, GEM_U32_WORDS cnt, LPBYTE pbuffer)
 {
+	GEM_U32_WORDS moved;
+
+	moved = dos_zero_words;
 	if (cnt.hi) {
 		dos_set_error(E_BADDATA);
-		return dos_zero_words;
+		return moved;
 	}
-	DOS_CX = cnt.lo;
-	DOS_BX = (UWORD) handle;
-	dos_lpvoid(0x4000, pbuffer);
-	return dos_transfer_words;
+	moved.lo = dos_io(handle, cnt.lo, pbuffer, TRUE);
+	return moved;
 }
 
 GEM_U32_WORDS
 dos_lseek(WORD handle, WORD smode, GEM_U32_WORDS sofst)
 {
-	DOS_AX = 0x4200;
-	DOS_AX += (UWORD) smode;
-	DOS_BX = (UWORD) handle;
-	DOS_CX = sofst.hi;
-	DOS_DX = sofst.lo;
-
-	__DOS();
-
-	return dos_transfer_words;
+	return dos_seek(handle, (UWORD) smode, sofst);
 }
 
 WORD
 dos_wait(VOID)
 {
-	DOS_AX = 0x4d00;
-	__DOS();
+	WORD result;
+	int status;
 
-	return (WORD) DOS_AX;
+	do {
+		result = (WORD) wait(&status);
+	} while (result < 0 && errno == EINTR);
+	if (result < 0) {
+		dos_finish_syscall(result);
+		return (WORD) DOS_AX;
+	}
+	dos_set_error(0);
+	return (WORD) status;
 }
 
+/*
+ * Original DOS arena calls become the ELKS C heap directly: no ownership
+ * table, byte budget, or emulated INT 21 register set stands between the
+ * Desktop and malloc/free.
+ */
 LPVOID
 dos_alloc(GEM_U32_WORDS nbytes)
 {
 	LPVOID maddr;
 
-	if (nbytes.hi) {
+	if (nbytes.hi || nbytes.lo == 0xffffU) {
 		dos_set_error(E_NOMEMORY);
 		return NULL;
 	}
-	DOS_AX = 0x4800;
-	DOS_BX = nbytes.lo;
-	dos_transfer_words = nbytes;
-	dos_heap_query = FALSE;
-
-	__DOS();
-
-	if (DOS_ERR)
-		maddr = NULL;
-	else
-		maddr = dos_result_pointer;
+	maddr = malloc(nbytes.lo ? nbytes.lo : 1U);
+	if (!maddr) {
+		dos_set_error(E_NOMEMORY);
+		return NULL;
+	}
+	dos_set_error(0);
 	return maddr;
 }
 
 GEM_U32_WORDS
 dos_avail(VOID)
 {
-	DOS_AX = 0x4800;
-	DOS_BX = 0xffffU;
-	dos_heap_query = TRUE;
+	GEM_U32_WORDS available;
 
-	__DOS();
-
-	dos_heap_query = FALSE;
-	return dos_transfer_words;
+	/*
+	 * ELKS malloc has no remaining-space query.  Report the fixed working
+	 * figure the Desktop historically sized its scratch requests against.
+	 */
+	available.lo = DOS_HEAP_BYTES;
+	available.hi = 0;
+	dos_set_error(0);
+	return available;
 }
 
 WORD
 dos_free(LPVOID maddr)
 {
-	DOS_AX = 0x4900;
-	DOS_ES = (UWORD) FP_SEG(maddr);
-	dos_es_pointer = maddr;
-
-	__DOS();
-
-	return !DOS_ERR;
+	if (maddr)
+		free(maddr);
+	dos_set_error(0);
+	return TRUE;
 }
 
 WORD
 dos_space(WORD drv, GEM_U32_WORDS *ptotal, GEM_U32_WORDS *pavail)
 {
-	DOS_AX = 0x3600;
-	DOS_DX = (UWORD) drv;
-	__DOS();
+	GEM_U32_WORDS total;
+	GEM_U32_WORDS available;
 
+	total = dos_zero_words;
+	available = dos_zero_words;
+	if ((UWORD) drv > 26U)
+		dos_set_error(E_BADDRIVE);
+	else if (!dos_filesystem_space(&total, &available))
+		dos_set_error(dos_error_from_errno(errno));
+	else
+		dos_set_error(0);
 	if (ptotal)
-		*ptotal = dos_space_total;
+		*ptotal = total;
 	if (pavail)
-		*pavail = dos_space_available;
+		*pavail = available;
 	return !DOS_ERR;
 }
 
 WORD
 dos_rmdir(LPBYTE ppath)
 {
-	dos_lpvoid(0x3a00, ppath);
+	dos_finish_syscall(dos_path_syscall(0x3a00U,
+		(const char *) ppath, (const char *) 0, (UWORD *) 0));
 	return !DOS_ERR;
 }
 
 WORD
 dos_mkdir(LPBYTE ppath)
 {
-	dos_lpvoid(0x3900, ppath);
+	dos_finish_syscall(dos_path_syscall(0x3900U,
+		(const char *) ppath, (const char *) 0, (UWORD *) 0));
 	return !DOS_ERR;
 }
 
 WORD
 dos_rename(LPBYTE poname, LPBYTE pnname)
 {
-	DOS_DI = (UWORD) FP_OFF(pnname);
-	DOS_ES = (UWORD) FP_SEG(pnname);
-	dos_es_pointer = pnname;
-	dos_lpvoid(0x5600, poname);
+	dos_finish_syscall(dos_path_syscall(0x5600U,
+		(const char *) poname, (const char *) pnname, (UWORD *) 0));
 	return !DOS_ERR;
 }
 
 WORD
 dos_chmod(LPBYTE pname, WORD func, WORD attr)
 {
-	DOS_CX = (UWORD) attr;
-	dos_lpvoid((UWORD) (0x4300 + func), pname);
+	UWORD attr_word;
+
+	attr_word = (UWORD) attr;
+	dos_finish_syscall(dos_path_syscall((UWORD) (0x4300 + func),
+		(const char *) pname, (const char *) 0, &attr_word));
 	if (DOS_ERR)
 		return FAILURE;
-	return (WORD) DOS_CX;
+	return (WORD) attr_word;
 }
 
 WORD
 dos_setdt(WORD handle, WORD time, WORD date)
 {
-	DOS_AX = 0x5701;
-	DOS_BX = (UWORD) handle;
-	DOS_CX = (UWORD) time;
-	DOS_DX = (UWORD) date;
-
-	__DOS();
+	dos_finish_syscall(dos_set_handle_clock(handle,
+		(UWORD) time, (UWORD) date));
 	return !DOS_ERR;
 }
 

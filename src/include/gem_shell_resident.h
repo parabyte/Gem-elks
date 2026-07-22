@@ -92,15 +92,14 @@ WORD gem_shell_resident_dispatch(const GEM_SHELL_CALL *call, WORD *handled);
 VOID gem_shell_resident_detach(UWORD owner, UWORD generation_lo,
 	UWORD generation_hi);
 
-#if !defined(ELKS) || !ELKS
 /*
- * Native smoke-only process hooks.  Production builds call proc_create(),
- * proc_run(), and proc_delete() directly and do not contain this test seam.
+ * Consume the one command recorded by SHEL_WRITE, exactly as the original
+ * single-tasking AES shell did after the requesting application exited.
+ * command receives the resolved executable path (128 bytes) and tail the
+ * classic length-prefixed argument record (128 bytes).  FALSE when no
+ * launch is pending.
  */
-WORD gem_shell_host_proc_create(WORD isgem, WORD *channel);
-WORD gem_shell_host_proc_run(WORD channel, WORD isgem, WORD isover,
-	const UBYTE *command, const UBYTE *tail);
-WORD gem_shell_host_proc_delete(WORD channel);
-#endif
+WORD gem_shell_resident_take_command(UBYTE *command, UWORD command_bytes,
+	UBYTE *tail, UWORD tail_bytes);
 
 #endif /* ELKS_GEM_SHELL_RESIDENT_H */

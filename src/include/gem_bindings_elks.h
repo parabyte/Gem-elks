@@ -77,10 +77,18 @@ WORD aescheck(VOID);
 WORD gemcheck(VOID);
 
 /*
+ * Divert every gem()/vdi() call to an in-process dispatcher instead of the
+ * INT EF trap.  The stock-ELKS direct-linked port installs its dispatchers
+ * here at startup, so no trap instruction ever executes.
+ */
+AESFUNC divert_aes(AESFUNC function);
+VDIFUNC divert_vdi(VDIFUNC function);
+
+/*
  * GEM/XM process-manager wrappers describe DOS arena ownership.  ELKS owns
- * process address spaces through src/aes/gem_proc_elks.c, so the imported
- * wrappers remain available for source audit but do not export competing
- * proc_* symbols unless a dedicated DOS build opts in explicitly.
+ * process address spaces outright and program launch goes through the
+ * original single-tasking SHEL_WRITE record, so the imported wrappers
+ * remain available for source audit but are never compiled in.
  */
 #ifndef GEM_BINDINGS_ENABLE_DOS_PROCESS
 #define GEM_BINDINGS_ENABLE_DOS_PROCESS 0

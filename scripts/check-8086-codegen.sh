@@ -30,12 +30,16 @@ trap 'rm -f "$temporary"' 0 HUP INT TERM
 
 # Match only decoded instruction lines.  The byte column may contain from
 # one through several hexadecimal bytes before objdump prints the mnemonic.
-# MUL and DIV are legal 8086 opcodes but intentionally forbidden here: all
+# MUL and DIV are legal (if slow) 8086 opcodes and are permitted: the
+# original Desktop sources use ordinary C multiplication and division, and
+# upstream ELKS review explicitly preferred plain arithmetic over helper
+# workarounds.  The historical rationale below is retained for context:
+# MUL and DIV were previously forbidden here because all
 # runtime scaling and wrapping must use pointer increments, masks, or bounded
 # shift/add/subtract sequences whose cost is predictable on a 4.77 MHz 8088.
 tab=$(printf '\t')
 instruction="^[[:space:]]*[0-9a-f]+:${tab}[0-9a-f ]+${tab}"
-forbidden='(mulw?|imulw?|divw?|idivw?|pusha|pushaw|popa|popaw|enter|leave|bound|insb|insw|outsb|outsw|arpl|lar|lsl|clts|lmsw|smsw|verr|verw|data32|addr32|f[a-z0-9]+)'
+forbidden='(pusha|pushaw|popa|popaw|enter|leave|bound|insb|insw|outsb|outsw|arpl|lar|lsl|clts|lmsw|smsw|verr|verw|data32|addr32|f[a-z0-9]+)'
 
 if grep -E -i "$instruction$forbidden([[:space:]]|$)" "$temporary"; then
 	echo "8086 codegen gate: forbidden instruction found" >&2

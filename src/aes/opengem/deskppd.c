@@ -39,9 +39,6 @@ WORD wmin(WORD a, WORD b)
 	return (a < b) ? a : b;
 }
 
-extern VOID dos_lpvoid(UWORD, LPVOID);
-
-
 VOID dos_label(BYTE drive, BYTE *plabel)
 {
 	BYTE		label_buf[128];
@@ -55,7 +52,7 @@ VOID dos_label(BYTE drive, BYTE *plabel)
 	memset(ex_fcb + 8, '?', 11);
 	memset(ex_fcb +19, 0,   21);
 
-	dos_lpvoid(0x1100, ADDR(&ex_fcb[0]));
+	(void) dos_vlabel(ADDR(&ex_fcb[0]));
 
 	if ( (DOS_AX & 0x00ff) == 0xff )
 	  *plabel = 0;

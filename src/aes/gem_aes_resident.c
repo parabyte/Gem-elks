@@ -1934,47 +1934,19 @@ gem_resident_appl_init(const struct gemtrap_request *request)
 {
 	GEM_RESIDENT_PD *pd;
 	WORD channel;
-	WORD mapped;
-	WORD adopted;
 	UWORD index;
 
-	adopted = FALSE;
 	pd = gem_resident_pd_for_request(request, &channel);
 	if (!pd) {
 		/*
-		 * The original Desktop is the one startup client which supplies the
-		 * GEM/XM extended buffer to APPL_INIT.  Reserve channel zero for that
-		 * handshake instead of whichever init child happens to run first.
-		 * This matters on ELKS because the Clock/Calculator deliberately waits
-		 * for the resident owner while init may have to respawn Desktop: without
-		 * this test the accessory can occupy channel zero and receive every raw
-		 * mouse sample intended for Desktop.
-		 *
-		 * A proc_run() child retains its already-reserved channel.  A NULL-XBUF
-		 * init-launched accessory or other POSIX GEM client is adopted into the
-		 * lowest free channel two through eleven; only this logical tag is
-		 * adopted, never its ELKS process or memory.  Channel one is the
-		 * resident AES and never issues INT EF itself.  The decision uses only
-		 * the two original 16-bit far-pointer halves and has no flattened or
-		 * wide-pointer arithmetic.
+		 * The direct-linked build has exactly one client, the Desktop
+		 * linked into this executable, so APPL_INIT always binds the
+		 * original channel zero.  No adoption, PID map, or logical
+		 * process table exists; ELKS alone owns every real process.
 		 */
-		mapped = gem_proc_channel_for_pid(request->pid);
-		if (mapped >= 2)
-			channel = mapped;
-		else if (gem_resident_pds[0].state == GEM_PD_FREE
-		    && (addr_in[0].lo || addr_in[0].hi))
-			channel = GEM_PROC_DESKTOP;
-		else {
-			if (!gem_proc_adopt_external(request->pid, &channel))
-				return -1;
-			adopted = TRUE;
-		}
-		if (!gem_resident_attach(request, channel)) {
-			if (adopted)
-				(void) gem_proc_release_external(channel,
-							 request->pid);
+		channel = GEM_PROC_DESKTOP;
+		if (!gem_resident_attach(request, channel))
 			return -1;
-		}
 	}
 	if (channel == GEM_PROC_DESKTOP)
 		gem_resident_nameit(gem_resident_pd_for_channel(channel),
@@ -1992,8 +1964,6 @@ gem_resident_appl_init(const struct gemtrap_request *request)
 		pd = gem_resident_pd_for_channel(channel);
 		if (pd)
 			(void) gem_resident_detach(request, pd, channel);
-		if (adopted)
-			(void) gem_proc_release_external(channel, request->pid);
 		return -1;
 	}
 	return channel;
@@ -2820,25 +2790,11 @@ gem_resident_window(const struct gemtrap_request *request)
 	if (!gem_resident_window_apply_effects(&gem_resident_window_effects))
 		return -1;
 	/*
-	 * Multi-application GEM routes raw keyboard and button input to the
-	 * application owning the top window.  ELKS remains the actual scheduler;
-	 * this only updates the original one-word logical foreground tag after a
-	 * successful operation which can change the top of the shared window tree.
-	 * Closing an accessory therefore returns input to the window underneath,
-	 * while WF_TOP from a WM_TOPPED reply gives the accessory input immediately.
+	 * Multi-application GEM re-routed raw input here whenever the top of
+	 * the shared window tree changed owner.  The direct-linked build has
+	 * one client, so the Desktop is always the logical foreground and no
+	 * switch exists.
 	 */
-	if (result
-	    && (control[0] == GEM_WINDOW_WIND_OPEN
-		|| control[0] == GEM_WINDOW_WIND_CLOSE
-		|| (control[0] == GEM_WINDOW_WIND_SET
-		    && (int_in[1] == GEM_WINDOW_WF_TOP
-			|| int_in[1] == GEM_WINDOW_WF_SIZTOP)))) {
-		top_owner = gem_window_resident_top_owner(&gem_resident_windows);
-		if (top_owner >= 0 && top_owner < GEM_PROC_CHANNELS
-		    && top_owner != GEM_PROC_AES
-		    && top_owner != gem_proc_foreground_channel())
-			(void) proc_switch(top_owner);
-	}
 	return result;
 }
 
@@ -3262,13 +3218,9 @@ gem_aes_resident_poll(UWORD elapsed_milliseconds)
 	gem_resident_initialize();
 	if (elapsed_milliseconds)
 		gem_event_resident_tick(elapsed_milliseconds);
-	channel = gem_proc_foreground_channel();
+	/* One linked client: the Desktop is always the logical foreground. */
+	channel = GEM_PROC_DESKTOP;
 	pd = gem_resident_pd_for_channel(channel);
-	if ((!pd || pd->state != GEM_PD_ATTACHED)
-	    && channel != GEM_PROC_DESKTOP) {
-		channel = GEM_PROC_DESKTOP;
-		pd = gem_resident_pd_for_channel(channel);
-	}
 	if (pd && pd->state == GEM_PD_ATTACHED
 	    && gem_vdi_resident_poll_input(&vdi_input)) {
 		/*
@@ -3390,8 +3342,6 @@ crysbind1(const struct gemtrap_request *request, WORD opcode,
 			return -1;
 		if (!gem_resident_detach(request, pd, channel))
 			return -1;
-		/* APPL_EXIT ends an adopted client's logical GEM lifetime. */
-		(void) gem_proc_release_external(channel, request->pid);
 		return TRUE;
 	case GEM_EVENT_EVNT_KEYBD:
 	case GEM_EVENT_EVNT_BUTTON:
@@ -3491,54 +3441,17 @@ crysbind(const struct gemtrap_request *request, WORD opcode,
 	if (!gem_resident_pd_for_request(request, NULL))
 		return -1;
 
-	switch (opcode) {
-	case PROC_CREATE:
-		result = proc_create(addr_in[0], addr_in[1], (WORD) int_in[0],
-				     (WORD) int_in[1], (WORD *) &int_out[1]);
-		if (result && (WORD) int_out[1] >= 2) {
-			pd = gem_resident_pd_for_channel((WORD) int_out[1]);
-			if (pd)
-				gem_resident_clear_pd(pd);
-		}
-		return result;
-	case PROC_RUN:
-		if (!gem_resident_copy_command(request, addr_in[0])
-		    || !gem_resident_copy_tail(request, addr_in[1], &tail))
-			return -1;
-		pd = gem_resident_pd_for_channel((WORD) int_in[0]);
-		if (!pd || pd->state != GEM_PD_FREE)
-			return -1;
-		gem_resident_nameit(pd, gem_resident_command);
-		result = proc_run((WORD) int_in[0], (WORD) int_in[1],
-				  (WORD) int_in[2], gem_resident_command, tail);
-		if (!result)
-			gem_resident_nameit(pd, NULL);
-		return result;
-	case PROC_DELETE:
-		result = proc_delete((WORD) int_in[0]);
-		if (result) {
-			pd = gem_resident_pd_for_channel((WORD) int_in[0]);
-			if (pd && pd->state == GEM_PD_FREE)
-				gem_resident_clear_pd(pd);
-		}
-		return result;
-	case PROC_INFO:
-		return proc_info((WORD) int_in[0], (WORD *) &int_out[1],
-				 (WORD *) &int_out[2], &addr_out[0],
-				 &addr_out[1], &addr_out[2], &addr_out[3],
-				 &addr_out[4]);
-	case PROC_MALLOC:
-	case PROC_MFREE:
-		/* DOS arena ownership is intentionally not recreated on ELKS. */
-		return -1;
-	case PROC_SWITCH:
-		return proc_switch((WORD) int_in[0]);
-	case PROC_SETBLOCK:
-		/* Retain GEMSUPER.C's pr_setblock semantic name for opcode 67. */
-		return proc_setblock((WORD) int_in[0]);
-	default:
-		return -1;
-	}
+	/*
+	 * GEM/XM opcodes 60 through 67 carved and scheduled DOS process
+	 * arenas.  ELKS owns processes and memory outright and program launch
+	 * goes through the original single-tasking SHEL_WRITE record, so the
+	 * whole extension is intentionally unsupported here.
+	 */
+	(void) tail;
+	(void) pd;
+	(void) result;
+	(void) opcode;
+	return -1;
 }
 
 /*
@@ -3691,61 +3604,25 @@ gem_aes_resident_ready(struct gemtrap_request *request)
 	return TRUE;
 }
 
+
+/*
+ * TRUE while any PD is still attached.  The server uses this after the
+ * Desktop pipe closes to distinguish an orderly APPL_EXIT from a client
+ * which died mid-session and left retained state behind.
+ */
 WORD
-gem_aes_resident_exit(struct gemtrap_request *request)
+gem_aes_resident_active(VOID)
 {
 	GEM_RESIDENT_PD *pd;
-	WORD channel;
-	WORD matches;
-	WORD result;
+	WORD count;
 
 	gem_resident_initialize();
-	if (!request || request->cx != GEMTRAP_CX_EXIT
-	    || request->ax >= GEM_PROC_CHANNELS)
-		return FALSE;
-	channel = (WORD) request->ax;
-	pd = gem_resident_pd_for_channel(channel);
-	if (!pd)
-		return FALSE;
-	matches = pd->state == GEM_PD_ATTACHED
-		  && pd->pid == request->pid
-		  && pd->segment == request->ds
-		  && pd->task_slot == (UBYTE) request->slot
-		  && pd->generation_lo == request->generation_lo
-		  && pd->generation_hi == request->generation_hi;
-	if (matches) {
-		/*
-		 * proc_run() children are reaped by gem_proc_poll().  An adopted
-		 * init child is not waitable by AES, so this kernel-generated EXIT is
-		 * its authoritative release event.  The PID/generation match above
-		 * prevents a stale EXIT from freeing a reused logical channel.
-		 */
-		(void) gem_proc_release_external(channel, request->pid);
-		if (!gem_resident_drop_channel(channel))
-			return FALSE;
-		gem_resident_menu_detach_owner(pd, channel);
-		gem_resident_window_detach_owner(pd, channel);
-		if (!gem_resource_resident_cleanup(&pd->resource))
-			return FALSE;
+	pd = gem_resident_pds;
+	count = GEM_PROC_CHANNELS;
+	while (count--) {
+		if (pd->state != GEM_PD_FREE)
+			return TRUE;
+		pd++;
 	}
-
-	/*
-	 * EXIT already contains the original attachment generation.  Always ask
-	 * the kernel to release it, even if userspace state was already cleared,
-	 * so a damaged owner record cannot leak the retained ELKS segment.
-	 */
-	result = gemctl(GEMCTL_DETACH, request);
-	if (result != 0 && errno != ESRCH)
-		return FALSE;
-	if (matches) {
-		gem_event_resident_detach((UWORD) channel,
-			pd->generation_lo, pd->generation_hi);
-		gem_shell_resident_detach((UWORD) channel,
-			pd->generation_lo, pd->generation_hi);
-		gem_startup_resident_detach((UWORD) channel,
-			pd->generation_lo, pd->generation_hi);
-		gem_resident_update_progress();
-		gem_resident_clear_pd(pd);
-	}
-	return TRUE;
+	return FALSE;
 }

@@ -1929,3 +1929,28 @@ gem_vdi_resident_shutdown(VOID)
 		gem_vdi_screen = NULL;
 	}
 }
+
+/*
+ * Release the physical adapter and input devices around one synchronous
+ * full-screen child launch, without touching the client workstation
+ * records.  gem_vdi_close() restores the text mode and the cooked tty
+ * state the child expects; resume reruns the idempotent physical open, so
+ * palette, font, cursor, and the opening white fill are re-established
+ * exactly as at startup.  The caller repaints through the ordinary AES
+ * redraw cascade afterwards.
+ */
+WORD __attribute__((optimize("Os")))
+gem_vdi_resident_suspend(VOID)
+{
+	if (!gem_vdi_screen)
+		return FALSE;
+	gem_vdi_close(gem_vdi_screen);
+	gem_vdi_screen = NULL;
+	return TRUE;
+}
+
+WORD __attribute__((optimize("Os")))
+gem_vdi_resident_resume(VOID)
+{
+	return gem_vdi_resident_startup();
+}

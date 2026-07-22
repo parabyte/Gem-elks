@@ -105,13 +105,12 @@ union REGS {
 
 extern union REGS DR;
 
-VOID dos_func(UWORD ax, UWORD lodsdx, UWORD hidsdx);
-VOID dos_lpvoid(UWORD ax, LPVOID ptr);
 WORD dos_chdir(LPBYTE pdrvpath);
 WORD dos_gdir(WORD drive, LPBYTE pdrvpath);
 WORD dos_gdrv(VOID);
 WORD dos_sdrv(WORD newdrv);
 WORD dos_sdta(LPVOID ldta);
+WORD dos_vlabel(LPVOID fcb);
 WORD dos_sfirst(LPBYTE pspec, WORD attr);
 WORD dos_snext(VOID);
 WORD dos_open(LPBYTE pname, WORD access);

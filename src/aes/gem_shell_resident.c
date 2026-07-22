@@ -6,11 +6,11 @@
  * sh_rdef(), and sh_wdef().  The selector switch retains the corresponding
  * GEMSUPER.C cases 120 through 127.
  *
- * ELKS owns address spaces and scheduling.  The DOS arena/overlay loader is
- * therefore replaced at the one historical sh_write() execution point by
- * proc_create() followed directly by proc_run().  Those functions use ELKS
- * vfork/exec and kernel process memory; there is no shell wrapper, converted
- * command record, resident DOS arena, or polling child task.
+ * ELKS owns address spaces and scheduling.  As in original single-tasking
+ * GEM, sh_write() only records the next command and tail; the shell entry
+ * point in gem_main.c consumes that record with plain vfork/execv/waitpid
+ * after the writer exits.  There is no process table, logical channel, DOS
+ * arena, shell wrapper, converted command record, or polling child task.
  *
  * Original fixed byte representations remain unchanged: command and tail are
  * 128 bytes, each PD retains the GEMLIB.H default command/directory fields,
@@ -25,7 +25,6 @@
 #include <unistd.h>
 
 #if defined(ELKS) && ELKS
-#include "gem_proc.h"
 #include "gem_resident_memory.h"
 #endif
 
@@ -50,9 +49,6 @@ static UBYTE gem_shell_context[GEM_SHELL_CONTEXT_BYTES];
 static UWORD gem_shell_context_owner;
 static UWORD gem_shell_context_generation_lo;
 static UWORD gem_shell_context_generation_hi;
-#if defined(ELKS) && ELKS
-static UBYTE gem_shell_owner_directory_ready;
-#endif
 
 /* Static XIF scratch keeps the 8086 stack small and the dispatcher serial. */
 static UBYTE gem_shell_command_scratch[GEM_SHELL_COMMAND_BYTES];
@@ -70,6 +66,8 @@ static const UBYTE gem_shell_initial_directory[] = "/GEMAPPS/GEMSYS";
 static const UBYTE gem_shell_gemsys_prefix[] = "/GEMAPPS/GEMSYS/";
 static const UBYTE gem_shell_apps_prefix[] = "/GEMAPPS/";
 static const UBYTE gem_shell_bin_prefix[] = "/bin/";
+/* GEM configuration such as DESKTOP.INF lives in the standard ELKS /etc. */
+static const UBYTE gem_shell_etc_prefix[] = "/etc/";
 
 /* A half-open byte interval is valid only when subtraction cannot wrap. */
 static WORD
@@ -310,7 +308,6 @@ gem_shell_resident_reset(VOID)
 	}
 	gem_shell_reset_context();
 #if defined(ELKS) && ELKS
-	gem_shell_owner_directory_ready = FALSE;
 #endif
 }
 
@@ -417,6 +414,16 @@ gem_shell_find_native(const UBYTE *input, UBYTE *found)
 			return FALSE;
 		return gem_shell_copy_path(found, gem_shell_candidate_path);
 	}
+	/*
+	 * Configuration files live in the standard ELKS /etc directory, so it
+	 * is searched first: DESKTOP.INF resolves to /etc/DESKTOP.INF for the
+	 * initial read and for every Save Desktop rewrite.
+	 */
+	if (!gem_shell_join(gem_shell_candidate_path,
+		gem_shell_etc_prefix, gem_shell_normal_path))
+		return FALSE;
+	if (gem_shell_path_exists(gem_shell_candidate_path))
+		return gem_shell_copy_path(found, gem_shell_candidate_path);
 	if (!gem_shell_join(gem_shell_candidate_path,
 		gem_shell_gemsys_prefix, gem_shell_normal_path))
 		return FALSE;
@@ -476,53 +483,64 @@ gem_shell_read(const GEM_SHELL_CALL *call, GEM_SHELL_PD *pd)
 	return gem_shell_finish(call, TRUE);
 }
 
+/*
+ * Original single-tasking GEM: SHEL_WRITE only records the next command.
+ * The requesting application then exits its event loop, and the shell entry
+ * point runs the recorded program with plain vfork/execv/waitpid before
+ * restarting the Desktop.  No process table, logical channel, DOS arena
+ * record, or launch bookkeeping exists; ELKS owns the child completely.
+ * The record is retained here, outside the PD slots, because the writer's
+ * PD is detached by its own APPL_EXIT before the command is consumed.
+ */
+static UBYTE gem_shell_pending;
+static UBYTE gem_shell_pending_command[GEM_SHELL_COMMAND_BYTES];
+static UBYTE gem_shell_pending_tail[GEM_SHELL_TAIL_BYTES];
+
 static WORD
 gem_shell_launch(GEM_SHELL_PD *pd)
 {
-	WORD channel;
-	WORD result;
+	UBYTE *destination;
+	const UBYTE *source;
+	UWORD count;
 
-	channel = -1;
-#if defined(ELKS) && ELKS
-	GEM_U32_WORDS no_base;
-	GEM_U32_WORDS no_size;
+	destination = gem_shell_pending_command;
+	source = pd->command;
+	count = GEM_SHELL_COMMAND_BYTES;
+	while (count--)
+		*destination++ = *source++;
+	destination = gem_shell_pending_tail;
+	source = pd->tail;
+	count = GEM_SHELL_TAIL_BYTES;
+	while (count--)
+		*destination++ = *source++;
+	gem_shell_pending = TRUE;
+	pd->launch_channel = -1;
+	return TRUE;
+}
 
-	/*
-	 * The exec child inherits gemaes's cwd, not the trapping Desktop's cwd.
-	 * Establish the original GEMSYS directory once before the first launch so
-	 * relative application asset opens behave exactly as they do in Desktop.
-	 * This is a direct ELKS chdir in the resident owner, not a shell process.
-	 */
-	if (!gem_shell_owner_directory_ready) {
-		if (chdir((const char *) gem_shell_initial_directory) != 0)
-			return FALSE;
-		gem_shell_owner_directory_ready = TRUE;
-	}
-	no_base.lo = 0;
-	no_base.hi = 0;
-	no_size.lo = 0;
-	no_size.hi = 0;
-	result = proc_create(no_base, no_size, FALSE, pd->is_gem, &channel);
-	if (!result)
+WORD
+gem_shell_resident_take_command(UBYTE *command, UWORD command_bytes,
+	UBYTE *tail, UWORD tail_bytes)
+{
+	UWORD count;
+	const UBYTE *source;
+	UBYTE *destination;
+
+	if (!gem_shell_pending || !command || !tail
+	    || command_bytes < GEM_SHELL_COMMAND_BYTES
+	    || tail_bytes < GEM_SHELL_TAIL_BYTES)
 		return FALSE;
-	result = proc_run(channel, pd->is_gem, pd->overlay,
-		(LPBYTE) pd->command, (LPBYTE) pd->tail);
-	if (!result) {
-		(void) proc_delete(channel);
-		return FALSE;
-	}
-#else
-	result = gem_shell_host_proc_create(pd->is_gem, &channel);
-	if (!result)
-		return FALSE;
-	result = gem_shell_host_proc_run(channel, pd->is_gem, pd->overlay,
-		pd->command, pd->tail);
-	if (!result) {
-		(void) gem_shell_host_proc_delete(channel);
-		return FALSE;
-	}
-#endif
-	pd->launch_channel = channel;
+	source = gem_shell_pending_command;
+	destination = command;
+	count = GEM_SHELL_COMMAND_BYTES;
+	while (count--)
+		*destination++ = *source++;
+	source = gem_shell_pending_tail;
+	destination = tail;
+	count = GEM_SHELL_TAIL_BYTES;
+	while (count--)
+		*destination++ = *source++;
+	gem_shell_pending = FALSE;
 	return TRUE;
 }
 
