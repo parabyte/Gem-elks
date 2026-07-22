@@ -34,6 +34,8 @@
 #include "gem_vdi_resident.h"
 #include "gemtrap.h"
 
+#include <fcntl.h>
+
 #define GEM_SERVER_TICK_MS	20U
 #define GEM_SERVER_TICK_US	20000U
 
@@ -185,61 +187,107 @@ gem_server_spawn(UWORD *desktop_pid)
 	}
 	gem_server_request_fd = request_pipe[0];
 	gem_server_reply_fd = reply_pipe[1];
+	/*
+	 * The request pipe must be non-blocking: ELKS pipes have no select()
+	 * handler, so the serve loop drains with non-blocking reads and sleeps
+	 * on EAGAIN rather than trusting a readiness signal.
+	 */
+	(void) fcntl(gem_server_request_fd, F_SETFL, O_NONBLOCK);
 	*desktop_pid = (UWORD) child;
 	return TRUE;
 }
 
 /*
- * Serve one Desktop lifetime.  Between requests the server sleeps in
- * select() with the 20 ms tick that drives resident mouse, menu, and
- * timer processing - the same cadence the broker owner used, without any
- * signal.  Returns when the client closes its request pipe.
+ * Sleep one 20 ms tick.  ELKS pipes have no select() handler and report a
+ * read-end as always ready, so select() cannot signal request-pipe
+ * readiness.  A select() with no descriptor sets is unaffected by that and
+ * is a portable fixed-interval sleep; it drives the resident mouse, menu,
+ * and timer cadence the broker owner previously got from SIGALRM.
+ */
+static VOID
+gem_server_tick_sleep(VOID)
+{
+	GEM_SERVER_TIMEVAL_WORDS timeout;
+
+	timeout.seconds_lo = 0;
+	timeout.seconds_hi = 0;
+	timeout.useconds_lo = GEM_SERVER_TICK_US;
+	timeout.useconds_hi = 0;
+	(void) select(0, NULL, NULL, NULL,
+		(struct timeval *) (VOID *) &timeout);
+}
+
+/*
+ * Process one complete request record: VDI draws reply immediately; AES
+ * calls may defer (their reply is delivered later by flush_ready once the
+ * resident event core completes the wait).
+ */
+static WORD
+gem_server_dispatch(struct gemtrap_request *request)
+{
+	WORD result;
+
+	if (request->cx == GEM_VDI_RESIDENT_SELECTOR) {
+		result = gem_vdi_resident_request(request,
+			gem_aes_resident_application(request));
+		request->ax = (UWORD) result;
+		return gem_server_reply(request);
+	}
+	result = gem_aes_resident_request(request);
+	gem_aes_resident_poll(0);
+	if (result != GEM_AES_RESIDENT_DEFERRED) {
+		request->ax = (UWORD) result;
+		return gem_server_reply(request);
+	}
+	return TRUE;
+}
+
+/*
+ * Serve one Desktop lifetime.  The request pipe is non-blocking, so queued
+ * requests are drained back-to-back with no per-request delay.  When no
+ * request byte is available the server runs exactly one 20 ms resident
+ * tick, which advances timers and input and completes any deferred wait.
+ * Returns when the client closes its request pipe (read returns EOF).
  */
 static VOID
 gem_server_serve(VOID)
 {
+	static UBYTE record[sizeof(struct gemtrap_request)];
 	struct gemtrap_request request;
-	GEM_SERVER_TIMEVAL_WORDS timeout;
-	fd_set readable;
-	WORD result;
-	int selected;
+	UWORD fill;
+	int got;
 
+	fill = 0;
 	for (;;) {
-		FD_ZERO(&readable);
-		FD_SET(gem_server_request_fd, &readable);
-		timeout.seconds_lo = 0;
-		timeout.seconds_hi = 0;
-		timeout.useconds_lo = GEM_SERVER_TICK_US;
-		timeout.useconds_hi = 0;
-		selected = select(gem_server_request_fd + 1, &readable,
-			NULL, NULL, (struct timeval *) (VOID *) &timeout);
-		if (selected < 0) {
-			if (errno == EINTR)
-				continue;
-			return;
-		}
-		if (selected > 0 && FD_ISSET(gem_server_request_fd, &readable)) {
-			if (!gem_server_io(gem_server_request_fd,
-			    (UBYTE *) &request, (UWORD) sizeof(request), FALSE))
-				return;
-			if (request.cx == GEM_VDI_RESIDENT_SELECTOR) {
-				result = gem_vdi_resident_request(&request,
-					gem_aes_resident_application(&request));
-				request.ax = (UWORD) result;
-				if (!gem_server_reply(&request))
-					return;
-			} else {
-				result = gem_aes_resident_request(&request);
-				gem_aes_resident_poll(0);
-				if (result != GEM_AES_RESIDENT_DEFERRED) {
-					request.ax = (UWORD) result;
-					if (!gem_server_reply(&request))
-						return;
-				}
+		got = read(gem_server_request_fd, record + fill,
+			(int) (sizeof(record) - fill));
+		if (got == 0)
+			return;			/* Desktop closed the pipe. */
+		if (got > 0) {
+			fill += (UWORD) got;
+			if (fill < (UWORD) sizeof(record))
+				continue;	/* Await the rest of the record. */
+			fill = 0;
+			{
+				UBYTE *dst = (UBYTE *) &request;
+				const UBYTE *src = record;
+				UWORD n = (UWORD) sizeof(request);
+				while (n--)
+					*dst++ = *src++;
 			}
-		} else {
-			gem_aes_resident_poll(GEM_SERVER_TICK_MS);
+			if (!gem_server_dispatch(&request))
+				return;
+			if (!gem_server_flush_ready())
+				return;
+			continue;
 		}
+		/* got < 0 */
+		if (errno == EINTR)
+			continue;
+		if (errno != EAGAIN && errno != EWOULDBLOCK)
+			return;			/* Unexpected pipe error. */
+		gem_server_tick_sleep();
+		gem_aes_resident_poll(GEM_SERVER_TICK_MS);
 		if (!gem_server_flush_ready())
 			return;
 	}

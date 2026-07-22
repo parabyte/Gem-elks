@@ -52,7 +52,7 @@ override CFLAGS := \
 	-march=i8086 \
 	-mtune=i8086 \
 	-msegment-relocation-stuff \
-	-mregparmcall \
+	-fno-inline \
 	-ffunction-sections \
 	-fdata-sections \
 	-fno-builtin-printf \
@@ -217,7 +217,7 @@ $(DESKTOP_OBJECTS): $(wildcard src/aes/opengem/*.h) \
 $(GEM): $(RESIDENT_OBJECTS) $(LIBVDI)
 	@mkdir -p $(dir $@) $(MAP_DIR)
 	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
-		-msegment-relocation-stuff -mregparmcall \
+		-msegment-relocation-stuff \
 		-maout-stack=2048 -maout-heap=4096 \
 		-Wl,--gc-sections -Wl,--icf=all \
 		-Wl,-Map,$(MAP_DIR)/gem.map -o $@ \
@@ -228,7 +228,7 @@ $(GEMDESK): $(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) $(CLIENT_OBJECTS) \
 		$(LIBGEMTRAP)
 	@mkdir -p $(dir $@) $(MAP_DIR)
 	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
-		-msegment-relocation-stuff -mregparmcall \
+		-msegment-relocation-stuff \
 		-maout-stack=2048 -maout-heap=12800 \
 		-Wl,--gc-sections -Wl,--icf=all \
 		-Wl,-Map,$(MAP_DIR)/gemdesk.map -o $@ \
