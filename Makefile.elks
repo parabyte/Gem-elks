@@ -142,12 +142,27 @@ DESKTOP_SEAM_OBJECTS := \
 	$(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(DESKTOP_SEAM_SRCS))
 CLIENT_OBJECTS := \
 	$(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(CLIENT_SRCS))
+
+# GEM applications: separate GEM clients that reuse the shared client
+# transport (gem_client.o) and the AES/VDI bindings.  They use libc time and
+# 32-bit epoch scalars, so they are built for the 8086 like everything else
+# but are intentionally outside the resident-core XT source and codegen gates,
+# which forbid wide scalars on the kernel/AES hot paths.
+APP_SRCS := \
+	src/apps/gemclock.c \
+	src/apps/gemcalc.c
+APP_OBJECTS := $(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(APP_SRCS))
+CLIENT_TRANSPORT_OBJECT := $(TRAP_OBJ_DIR)/bindings/gem_client.o
+APP_RUNTIME_OBJECT := $(TRAP_OBJ_DIR)/apps/gem_app_vdi.o \
+	$(TRAP_OBJ_DIR)/aes/gem_wordpair.o
 TRAP_BINDING_OBJECTS := \
 	$(patsubst src/bindings/original/%.c,\
 		$(TRAP_OBJ_DIR)/bindings/original/%.o,$(TRAP_BINDING_SRCS))
 
 GEM := $(BIN_DIR)/gem
 GEMDESK := $(BIN_DIR)/gemdesk
+GEMCLOCK := $(BIN_DIR)/gemclock
+GEMCALC := $(BIN_DIR)/gemcalc
 LIBVDI := $(LIB_DIR)/libvdi.a
 LIBGEMTRAP := $(LIB_DIR)/libgemtrap.a
 ALL_OBJECTS := $(VDI_OBJECTS) $(VDI_ASM_OBJECTS) $(RESIDENT_OBJECTS) \
@@ -160,7 +175,7 @@ ALL_SRCS := $(VDI_SRCS) $(VDI_ASM_SRCS) $(RESIDENT_SRCS) \
 .PHONY: all audit source-audit asset-audit codegen-audit lineage-audit \
 	install clean
 
-all: $(GEM) $(GEMDESK)
+all: $(GEM) $(GEMDESK) $(GEMCLOCK) $(GEMCALC)
 
 audit: source-audit asset-audit codegen-audit lineage-audit
 
@@ -236,10 +251,36 @@ $(GEMDESK): $(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) $(CLIENT_OBJECTS) \
 		$(LIBGEMTRAP)
 	OBJDUMP86=$(OBJDUMP86) ./scripts/check-small-model.sh $@
 
+$(GEMCLOCK): $(TRAP_OBJ_DIR)/apps/gemclock.o $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+	@mkdir -p $(dir $@) $(MAP_DIR)
+	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
+		-msegment-relocation-stuff \
+		-maout-stack=2048 -maout-heap=4096 \
+		-Wl,--gc-sections -Wl,--icf=all \
+		-Wl,-Map,$(MAP_DIR)/gemclock.map -o $@ \
+		$(TRAP_OBJ_DIR)/apps/gemclock.o $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+	OBJDUMP86=$(OBJDUMP86) ./scripts/check-small-model.sh $@
+
+$(GEMCALC): $(TRAP_OBJ_DIR)/apps/gemcalc.o $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+	@mkdir -p $(dir $@) $(MAP_DIR)
+	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
+		-msegment-relocation-stuff \
+		-maout-stack=2048 -maout-heap=4096 \
+		-Wl,--gc-sections -Wl,--icf=all \
+		-Wl,-Map,$(MAP_DIR)/gemcalc.map -o $@ \
+		$(TRAP_OBJ_DIR)/apps/gemcalc.o $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+	OBJDUMP86=$(OBJDUMP86) ./scripts/check-small-model.sh $@
+
 install: all
 	install -d $(DESTDIR)/bin $(DESTDIR)/etc $(DESTDIR)/GEMAPPS/GEMSYS
 	install -m 755 $(GEM) $(DESTDIR)/bin/gem
 	install -m 755 $(GEMDESK) $(DESTDIR)/bin/gemdesk
+	install -m 755 $(GEMCLOCK) $(DESTDIR)/bin/gemclock
+	install -m 755 $(GEMCALC) $(DESTDIR)/bin/gemcalc
 	install -m 644 assets/GEMAPPS/GEMSYS/DESKTOP.INF $(DESTDIR)/etc/DESKTOP.INF
 	install -m 644 assets/GEMAPPS/GEMSYS/DESKTOP.RSC \
 		assets/GEMAPPS/GEMSYS/DESKHI.ICN \

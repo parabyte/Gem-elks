@@ -674,7 +674,10 @@ pro_run_file(WORD drv, BYTE *ppath, BYTE *pfname, WORD wh, WORD curr)
 		return FALSE;
 	G.g_tail[0] = 0;
 	G.g_tail[1] = 0;
-	return pro_run(TRUE, 1, wh, curr);
+	/* Plain executable: isgraf FALSE so the server runs it on the
+	 * text console.  GEM applications are launched isgraf TRUE from the
+	 * Desk menu and are served as a live GEM client instead. */
+	return pro_run(FALSE, 1, wh, curr);
 }
 
 WORD do_open(WORD curr)
@@ -699,6 +702,7 @@ WORD do_open(WORD curr)
 	 * (non-executable) documents fall through to the normal handling below.
 	 */
 	if ( pf && !(pf->f_attr & (F_SUBDIR | F_VOLUME))
+	     && !(pa && isapp && (pa->a_flags & AF_ISGRAF))
 	     && pro_run_file(drv, &path[0], &pf->f_name[0], G.g_cwin, curr) )
 	  return(TRUE);
 

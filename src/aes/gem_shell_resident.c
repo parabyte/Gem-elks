@@ -495,6 +495,7 @@ gem_shell_read(const GEM_SHELL_CALL *call, GEM_SHELL_PD *pd)
 static UBYTE gem_shell_pending;
 static UBYTE gem_shell_pending_command[GEM_SHELL_COMMAND_BYTES];
 static UBYTE gem_shell_pending_tail[GEM_SHELL_TAIL_BYTES];
+static WORD gem_shell_pending_is_gem;
 
 static WORD
 gem_shell_launch(GEM_SHELL_PD *pd)
@@ -513,6 +514,7 @@ gem_shell_launch(GEM_SHELL_PD *pd)
 	count = GEM_SHELL_TAIL_BYTES;
 	while (count--)
 		*destination++ = *source++;
+	gem_shell_pending_is_gem = pd->is_gem;
 	gem_shell_pending = TRUE;
 	pd->launch_channel = -1;
 	return TRUE;
@@ -520,7 +522,7 @@ gem_shell_launch(GEM_SHELL_PD *pd)
 
 WORD
 gem_shell_resident_take_command(UBYTE *command, UWORD command_bytes,
-	UBYTE *tail, UWORD tail_bytes)
+	UBYTE *tail, UWORD tail_bytes, WORD *is_gem)
 {
 	UWORD count;
 	const UBYTE *source;
@@ -540,6 +542,8 @@ gem_shell_resident_take_command(UBYTE *command, UWORD command_bytes,
 	count = GEM_SHELL_TAIL_BYTES;
 	while (count--)
 		*destination++ = *source++;
+	if (is_gem)
+		*is_gem = gem_shell_pending_is_gem;
 	gem_shell_pending = FALSE;
 	return TRUE;
 }

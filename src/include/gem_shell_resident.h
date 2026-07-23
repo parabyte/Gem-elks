@@ -100,6 +100,6 @@ VOID gem_shell_resident_detach(UWORD owner, UWORD generation_lo,
  * launch is pending.
  */
 WORD gem_shell_resident_take_command(UBYTE *command, UWORD command_bytes,
-	UBYTE *tail, UWORD tail_bytes);
+	UBYTE *tail, UWORD tail_bytes, WORD *is_gem);
 
 #endif /* ELKS_GEM_SHELL_RESIDENT_H */

@@ -151,12 +151,16 @@ gem_server_close_pipes(VOID)
 }
 
 /*
- * Start one Desktop client with the transport pipes on its descriptors 3
- * and 4.  vfork() on stock ELKS is an ordinary fork; only descriptor moves,
- * the raw exec, and _exit run in the child either way.
+ * Start one GEM client - the Desktop, or a launched GEM application - with
+ * the transport pipes on its descriptors 3 and 4.  Any program built with
+ * the client transport (gem_client.c) becomes the sole GEM client while the
+ * server serves it, so a single-tasking launch of a GEM app keeps the screen
+ * live instead of dropping to a text console.  vfork() on stock ELKS is an
+ * ordinary fork; only descriptor moves, the raw exec, and _exit run in the
+ * child either way.
  */
 static WORD
-gem_server_spawn(UWORD *desktop_pid)
+gem_server_spawn(const char *program, UWORD *child_pid)
 {
 	int request_pipe[2];
 	int reply_pipe[2];
@@ -171,6 +175,10 @@ gem_server_spawn(UWORD *desktop_pid)
 	}
 	child = vfork();
 	if (child == (pid_t) 0) {
+		char *child_argv[2];
+
+		child_argv[0] = (char *) program;
+		child_argv[1] = (char *) 0;
 		if (dup2(request_pipe[1], GEM_SERVER_REQUEST_FD) < 0
 		    || dup2(reply_pipe[0], GEM_SERVER_REPLY_FD) < 0)
 			_exit(126);
@@ -178,9 +186,7 @@ gem_server_spawn(UWORD *desktop_pid)
 		(void) close(request_pipe[1]);
 		(void) close(reply_pipe[0]);
 		(void) close(reply_pipe[1]);
-		static char *desktop_argv[2] = { (char *) gem_server_desktop, 0 };
-
-		execv(gem_server_desktop, desktop_argv);
+		execv(program, child_argv);
 		_exit(127);
 	}
 	(void) close(request_pipe[1]);
@@ -195,11 +201,11 @@ gem_server_spawn(UWORD *desktop_pid)
 	/*
 	 * The request pipe stays blocking.  ELKS pipes have no select() handler,
 	 * but a blocking read is exactly what the serve loop wants while the
-	 * Desktop is drawing: it returns each request the instant it arrives,
+	 * client is drawing: it returns each request the instant it arrives,
 	 * with no per-call polling delay.  The 20 ms input tick is used only
 	 * while a deferred AES event is outstanding (see gem_server_serve).
 	 */
-	*desktop_pid = (UWORD) child;
+	*child_pid = (UWORD) child;
 	return TRUE;
 }
 
@@ -388,9 +394,12 @@ gem_server_run_command(VOID)
 int
 main(int argc, char **argv)
 {
-	UWORD desktop_pid;
+	static UBYTE program[GEM_SHELL_COMMAND_BYTES];
+	UWORD child_pid;
 	pid_t waited;
 	WORD status;
+	WORD is_gem;
+	WORD spawning_desktop;
 
 	(void) argc;
 	/*
@@ -406,27 +415,50 @@ main(int argc, char **argv)
 	if (!gem_vdi_resident_startup())
 		return 1;
 
+	{
+		const char *d = gem_server_desktop;
+		UBYTE *p = program;
+		while ((*p++ = (UBYTE) *d++) != 0)
+			;
+	}
+	spawning_desktop = TRUE;
+
 	for (;;) {
-		if (!gem_server_spawn(&desktop_pid)) {
+		if (!gem_server_spawn((const char *) program, &child_pid)) {
 			gem_vdi_resident_shutdown();
 			return 1;
 		}
 		gem_server_serve();
 		gem_server_close_pipes();
 		do {
-			waited = waitpid((pid_t) desktop_pid,
+			waited = waitpid((pid_t) child_pid,
 				(int *) &status, 0);
 		} while (waited == (pid_t) -1 && errno == EINTR);
 		(void) waited;
 		(void) status;
 
+		is_gem = FALSE;
 		if (gem_shell_resident_take_command(gem_server_command,
 		    GEM_SHELL_COMMAND_BYTES, gem_server_tail,
-		    GEM_SHELL_TAIL_BYTES)) {
+		    GEM_SHELL_TAIL_BYTES, &is_gem)) {
+			if (is_gem) {
+				/*
+				 * A GEM application: serve it as the next client
+				 * with the screen still live.  It talks AES/VDI
+				 * over the transport pipes exactly like the
+				 * Desktop and, on APPL_EXIT, returns here so the
+				 * Desktop is brought back.
+				 */
+				UBYTE *p = program;
+				const UBYTE *c = gem_server_command;
+				while ((*p++ = *c++) != 0)
+					;
+				spawning_desktop = FALSE;
+				continue;
+			}
 			/*
-			 * Single-tasking launch: give the program a plain text
-			 * console, run it to completion, then reopen the screen
-			 * for the next Desktop.
+			 * A plain program: give it a text console, run it to
+			 * completion, then reopen the screen for the Desktop.
 			 */
 			(void) gem_vdi_resident_suspend();
 			gem_server_run_command();
@@ -434,9 +466,13 @@ main(int argc, char **argv)
 				gem_vdi_resident_shutdown();
 				return 1;
 			}
-			continue;
-		}
-		if (gem_aes_resident_active()) {
+		} else if (!spawning_desktop) {
+			/*
+			 * A GEM application exited without launching anything.
+			 * Bring the Desktop back.
+			 */
+			(void) 0;
+		} else if (gem_aes_resident_active()) {
 			/*
 			 * The Desktop died without APPL_EXIT.  Restart the whole
 			 * server through exec so every resident record begins
@@ -447,8 +483,18 @@ main(int argc, char **argv)
 				execv(argv[0], argv);
 			execv(gem_server_self, argv);
 			return 1;
+		} else {
+			break;		/* Desktop quit cleanly. */
 		}
-		break;
+
+		/* Default next client is the Desktop. */
+		{
+			const char *d = gem_server_desktop;
+			UBYTE *p = program;
+			while ((*p++ = (UBYTE) *d++) != 0)
+				;
+		}
+		spawning_desktop = TRUE;
 	}
 	gem_vdi_resident_shutdown();
 	return 0;
