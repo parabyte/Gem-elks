@@ -111,6 +111,7 @@ WORD dos_gdrv(VOID);
 WORD dos_sdrv(WORD newdrv);
 WORD dos_sdta(LPVOID ldta);
 WORD dos_vlabel(LPVOID fcb);
+WORD dos_executable(LPBYTE path);
 WORD dos_sfirst(LPBYTE pspec, WORD attr);
 WORD dos_snext(VOID);
 WORD dos_open(LPBYTE pname, WORD access);

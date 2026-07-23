@@ -106,7 +106,6 @@
 #define GEM_VDI_CHAR_WIDTH	8
 #define GEM_VDI_CHAR_HEIGHT	16
 #define GEM_VDI_GLYPH_WIDTH	5
-#define GEM_VDI_GLYPH_HEIGHT	7
 #define GEM_VDI_GLYPH_ADVANCE	8
 #define GEM_VDI_SYSTEM_GLYPH_BYTES 16U
 #define GEM_VDI_USER_LINE	7
@@ -665,145 +664,36 @@ gem_vdi_fill_output(GEM_VDI_RESIDENT_WORKSTATION *workstation)
 }
 
 static const GEM_VDI_UBYTE *
-gem_vdi_glyph_rows(WORD character)
-{
-	static const GEM_VDI_UBYTE blank[7] =
-		{ 0, 0, 0, 0, 0, 0, 0 };
-	static const GEM_VDI_UBYTE digits[10][7] = {
-		{ 0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e },
-		{ 0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e },
-		{ 0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f },
-		{ 0x1e, 0x01, 0x01, 0x0e, 0x01, 0x01, 0x1e },
-		{ 0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02 },
-		{ 0x1f, 0x10, 0x10, 0x1e, 0x01, 0x01, 0x1e },
-		{ 0x0e, 0x10, 0x10, 0x1e, 0x11, 0x11, 0x0e },
-		{ 0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08 },
-		{ 0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e },
-		{ 0x0e, 0x11, 0x11, 0x0f, 0x01, 0x01, 0x0e }
-	};
-	static const GEM_VDI_UBYTE letters[26][7] = {
-		{ 0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11 },
-		{ 0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e },
-		{ 0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e },
-		{ 0x1e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1e },
-		{ 0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f },
-		{ 0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10 },
-		{ 0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0f },
-		{ 0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11 },
-		{ 0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e },
-		{ 0x07, 0x02, 0x02, 0x02, 0x12, 0x12, 0x0c },
-		{ 0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11 },
-		{ 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f },
-		{ 0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11 },
-		{ 0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11 },
-		{ 0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e },
-		{ 0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10 },
-		{ 0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d },
-		{ 0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11 },
-		{ 0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e },
-		{ 0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04 },
-		{ 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e },
-		{ 0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04 },
-		{ 0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0a },
-		{ 0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11 },
-		{ 0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04 },
-		{ 0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f }
-	};
-	static const GEM_VDI_UBYTE dot[7] =
-		{ 0, 0, 0, 0, 0, 0x0c, 0x0c };
-	static const GEM_VDI_UBYTE colon[7] =
-		{ 0, 0x0c, 0x0c, 0, 0x0c, 0x0c, 0 };
-	static const GEM_VDI_UBYTE slash[7] =
-		{ 0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10 };
-	static const GEM_VDI_UBYTE backslash[7] =
-		{ 0x10, 0x08, 0x08, 0x04, 0x02, 0x02, 0x01 };
-	static const GEM_VDI_UBYTE dash[7] =
-		{ 0, 0, 0, 0x1f, 0, 0, 0 };
-	static const GEM_VDI_UBYTE underscore[7] =
-		{ 0, 0, 0, 0, 0, 0, 0x1f };
-	const GEM_VDI_UBYTE *glyph;
-	UWORD index;
-
-	if (character >= 'a' && character <= 'z')
-		character -= 'a' - 'A';
-	if (character >= 'A' && character <= 'Z') {
-		glyph = &letters[0][0];
-		index = (UWORD) (character - 'A');
-		while (index--)
-			glyph += GEM_VDI_GLYPH_HEIGHT;
-		return glyph;
-	}
-	if (character >= '0' && character <= '9') {
-		glyph = &digits[0][0];
-		index = (UWORD) (character - '0');
-		while (index--)
-			glyph += GEM_VDI_GLYPH_HEIGHT;
-		return glyph;
-	}
-	switch (character) {
-	case '.':
-		return dot;
-	case ':':
-		return colon;
-	case '/':
-		return slash;
-	case '\\':
-		return backslash;
-	case '-':
-		return dash;
-	case '_':
-		return underscore;
-	default:
-		return blank;
-	}
-}
-
-static const GEM_VDI_UBYTE *
 gem_vdi_system_glyph_rows(WORD character)
 {
-	const GEM_VDI_UBYTE *source;
 	UWORD glyph_offset;
 	UWORD glyph_segment;
-	UWORD index;
-	UWORD destination;
 
 	/*
-	 * VGA BIOS function 1130h exposes the same native 8 by 16 PC glyph cells
-	 * used by the original screen driver.  Locate character times sixteen with
-	 * four bounded word doublings; no multiply, wide pointer, or conversion is
-	 * involved.  A carry in the offset advances the real-mode segment by 1000h,
-	 * which preserves the same physical byte address modulo the 20-bit bus.
+	 * The system font is exclusively the adapter's own 8 by 16 ROM font,
+	 * located through the VGA BIOS (INT 10h function 1130h, BH=6) at
+	 * gem_vdi_resident_startup().  There is no embedded software font:
+	 * when the ROM font is unavailable this returns NULL and the caller
+	 * draws nothing, so text always renders in the true PC screen font.
+	 *
+	 * Locate character times sixteen with four bounded word doublings; no
+	 * multiply, wide pointer, or conversion is involved.  A carry in the
+	 * offset advances the real-mode segment by 1000h, preserving the same
+	 * physical byte address modulo the 20-bit bus.
 	 */
-	if (gem_vdi_font_segment) {
-		glyph_offset = (UWORD) character & 0x00ffU;
-		glyph_offset += glyph_offset;
-		glyph_offset += glyph_offset;
-		glyph_offset += glyph_offset;
-		glyph_offset += glyph_offset;
-		glyph_segment = gem_vdi_font_segment;
-		glyph_offset += gem_vdi_font_offset;
-		if (glyph_offset < gem_vdi_font_offset)
-			glyph_segment += 0x1000U;
-		gem_resident_memory_from(glyph_segment, glyph_offset,
-			gem_vdi_system_glyph, GEM_VDI_SYSTEM_GLYPH_BYTES);
-		return gem_vdi_system_glyph;
-	}
-
-	/*
-	 * A pre-VGA BIOS may not return selector six.  Keep an exact 8 by 16 cell
-	 * by placing the compact original fallback between one blank top and one
-	 * blank bottom row, doubling each of its seven source rows vertically.
-	 */
-	source = gem_vdi_glyph_rows(character);
-	destination = 0;
-	gem_vdi_system_glyph[destination++] = 0;
-	index = 0;
-	while (index < GEM_VDI_GLYPH_HEIGHT) {
-		gem_vdi_system_glyph[destination++] = source[index];
-		gem_vdi_system_glyph[destination++] = source[index];
-		index++;
-	}
-	gem_vdi_system_glyph[destination] = 0;
+	if (!gem_vdi_font_segment)
+		return NULL;
+	glyph_offset = (UWORD) character & 0x00ffU;
+	glyph_offset += glyph_offset;
+	glyph_offset += glyph_offset;
+	glyph_offset += glyph_offset;
+	glyph_offset += glyph_offset;
+	glyph_segment = gem_vdi_font_segment;
+	glyph_offset += gem_vdi_font_offset;
+	if (glyph_offset < gem_vdi_font_offset)
+		glyph_segment += 0x1000U;
+	gem_resident_memory_from(glyph_segment, glyph_offset,
+		gem_vdi_system_glyph, GEM_VDI_SYSTEM_GLYPH_BYTES);
 	return gem_vdi_system_glyph;
 }
 

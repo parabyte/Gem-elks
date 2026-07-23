@@ -655,6 +655,28 @@ VOID do_fopen(WNODE *pw, WORD curr, WORD drv,
 *	Open an icon
 */
 
+/*
+ * ELKS: run a selected regular file directly when the kernel will exec() it.
+ * Build the absolute spec, resolve it through SHEL_FIND, and launch it exactly
+ * like a directly-clicked application.  Returns FALSE - leaving the Desktop
+ * untouched - when the file is not executable, so ordinary documents fall
+ * through to the normal DESKTOP.INF association handling.
+ */
+static WORD
+pro_run_file(WORD drv, BYTE *ppath, BYTE *pfname, WORD wh, WORD curr)
+{
+	if (!fpd_bldspec(drv, ppath, pfname, (BYTE *) "", G.g_srcpth))
+		return FALSE;
+	strlcpy(G.g_cmd, G.g_srcpth, sizeof(G.g_cmd));
+	if (!shel_find(G.a_cmd))
+		return FALSE;
+	if (!dos_executable((LPBYTE) G.a_cmd))
+		return FALSE;
+	G.g_tail[0] = 0;
+	G.g_tail[1] = 0;
+	return pro_run(TRUE, 1, wh, curr);
+}
+
 WORD do_open(WORD curr)
 {
 	WORD		done;
@@ -670,6 +692,15 @@ WORD do_open(WORD curr)
 	pw = win_find(G.g_cwin);
 	if ( pf )
 	  fpd_parse(&pw->w_path->p_spec[0],&drv,&path[0],&name[0],&ext[0]);
+
+	/*
+	 * ELKS: any regular file the kernel will exec() is directly runnable,
+	 * with or without a DESKTOP.INF association.  Try that first; ordinary
+	 * (non-executable) documents fall through to the normal handling below.
+	 */
+	if ( pf && !(pf->f_attr & (F_SUBDIR | F_VOLUME))
+	     && pro_run_file(drv, &path[0], &pf->f_name[0], G.g_cwin, curr) )
+	  return(TRUE);
 
 	if ( pa )
 	{	

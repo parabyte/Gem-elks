@@ -1520,6 +1520,33 @@ dos_dtype(WORD drive)
 	return 1;
 }
 
+/*
+ * ELKS extension: report whether an absolute path names a regular file that
+ * carries an execute permission bit.  The Desktop uses this so double-clicking
+ * any executable launches it directly, with no DESKTOP.INF association.
+ *
+ * The file's own mode bits are tested rather than access(X_OK): the Desktop
+ * runs as the superuser, and the ELKS permission check grants root execute
+ * access to every file regardless of its bits, so access() would report every
+ * data file as runnable.  Only S_IXUSR/S_IXGRP/S_IXOTH on a regular file mean
+ * the following execv() can succeed.
+ */
+WORD
+dos_executable(LPBYTE path)
+{
+	struct stat native;
+	UWORD mode;
+
+	if (!path || !*path)
+		return FALSE;
+	if (stat((const char *) path, &native) != 0)
+		return FALSE;
+	if (!S_ISREG(native.st_mode))
+		return FALSE;
+	mode = (UWORD) native.st_mode;
+	return (mode & (UWORD) (S_IXUSR | S_IXGRP | S_IXOTH)) != 0;
+}
+
 int
 int86(int vec, union REGS *inregs, union REGS *outregs)
 {
