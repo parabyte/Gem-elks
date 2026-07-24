@@ -15,7 +15,11 @@
 #define ELKS_GEM_IRC_LAYOUT_H
 
 #define GEM_IRC_LAYOUT_MIN_WIDTH       400
-#define GEM_IRC_LAYOUT_MIN_HEIGHT      140
+/*
+ * The minimum height must hold the topic strip, several transcript rows, the
+ * editor, and the bottom action-button toolbar without any band collapsing.
+ */
+#define GEM_IRC_LAYOUT_MIN_HEIGHT      176
 #define GEM_IRC_LAYOUT_MARGIN          16
 #define GEM_IRC_LAYOUT_INPUT_PADDING   6
 #define GEM_IRC_LAYOUT_TOPIC_PADDING   4

@@ -60,17 +60,16 @@
 #ifndef IRC_AES_INPUT
 #define IRC_AES_INPUT 1
 #endif
-#if defined(IRC_AES_INPUT) && IRC_AES_INPUT
+/*
+ * The GEM toolbar (conversation tabs and action buttons) always needs the
+ * left-button click, so MU_BUTTON is requested in every build.  objc_find
+ * routes each click to a tab or an action button; the optional AES input
+ * field consumes any click that does not land on the toolbar.
+ */
 #define IRC_EVENT_FLAGS  (MU_MESAG | MU_KEYBD | MU_TIMER | MU_BUTTON)
 #define IRC_EVENT_BCLK   1U
 #define IRC_EVENT_BMSK   1U
 #define IRC_EVENT_BST    1U
-#else
-#define IRC_EVENT_FLAGS  (MU_MESAG | MU_KEYBD | MU_TIMER)
-#define IRC_EVENT_BCLK   0U
-#define IRC_EVENT_BMSK   0U
-#define IRC_EVENT_BST    0U
-#endif
 
 /*
  * ia16 GCC's size optimizer can recognize the decimal parser's x8+x2 sum
@@ -317,6 +316,26 @@ irc_configuration (WORD argc, BYTE **argv)
 }
 
 /*
+ * The bottom toolbar strip is one character row plus four pixels tall and is
+ * reserved below the single-line editor.  Both edges are scale-one pixels
+ * derived from the current work rectangle (at most 640 by 480 here), so the
+ * additions and subtractions stay inside a signed 16-bit WORD.  Every layout
+ * consumer computes its bands from these two seams, so the editor, transcript,
+ * and toolbar never overlap after a move, resize, or full-screen toggle.
+ */
+static WORD
+irc_toolbar_top_y (VOID)
+{
+  return irc_work.g_y + irc_work.g_h - irc_character_height - 4;
+}
+
+static WORD
+irc_input_top_y (VOID)
+{
+  return irc_toolbar_top_y () - irc_character_height - IRC_INPUT_PADDING;
+}
+
+/*
  * Queue one AES damage rectangle.  Coordinates have scale one pixel.  Empty
  * requests are discarded and valid requests form the bounding union of all
  * damage received before the next paint.  The paint routine intersects that
@@ -399,8 +418,7 @@ irc_queue_app_redraw (UWORD dirty)
       return;
     }
 
-  input_top = irc_work.g_y + irc_work.g_h
-    - irc_character_height - IRC_INPUT_PADDING;
+  input_top = irc_input_top_y ();
   topic_bottom = irc_work.g_y + irc_character_height + IRC_TOPIC_PADDING;
   right_edge = irc_work.g_x + irc_work.g_w - IRC_SIDE_WIDTH;
 
@@ -444,6 +462,20 @@ irc_queue_app_redraw (UWORD dirty)
       request.g_h = irc_work.g_y + irc_work.g_h - input_top;
       irc_queue_redraw (&request);
     }
+  /*
+   * A tab set change (a new private conversation, an unread marker, or a
+   * switch) repaints the whole work area once.  The tab column and the
+   * action-button strip lie on opposite edges, so a single bounding request
+   * is both simpler and no more expensive than two separate rectangles.
+   */
+  if (dirty & GEM_IRC_APP_DIRTY_TABS)
+    {
+      request.g_x = irc_work.g_x;
+      request.g_y = irc_work.g_y;
+      request.g_w = irc_work.g_w;
+      request.g_h = irc_work.g_h;
+      irc_queue_redraw (&request);
+    }
 }
 
 static VOID
@@ -469,12 +501,13 @@ irc_visible_rows (VOID)
   UWORD rows;
 
   /*
-   * Reserve one character row plus four pixels for the topic strip, and
-   * one character row plus six pixels for the editor.  Counts are scale-one
-   * pixels and saturate at the single-row minimum below.
+   * The transcript band is the gap between the topic strip and the editor.
+   * The editor seam already reserves the bottom toolbar strip, so counting
+   * rows in this band leaves the tabs and action buttons untouched.  Counts
+   * are scale-one pixels and saturate at the single-row minimum below.
    */
-  remaining = irc_work.g_h - irc_character_height
-    - IRC_TOPIC_PADDING - irc_character_height - IRC_INPUT_PADDING;
+  remaining = irc_input_top_y ()
+    - (irc_work.g_y + irc_character_height + IRC_TOPIC_PADDING);
   rows = 0;
   while (remaining >= irc_character_height && rows < GEM_IRC_APP_SCROLL_LINES)
     {
@@ -736,6 +769,286 @@ irc_aes_click (WORD mouse_x, WORD mouse_y)
 #endif /* IRC_AES_INPUT */
 
 /*
+ * GEM toolbar: a native AES OBJECT tree carrying one G_BUTTON per open
+ * conversation (a clickable tab) and four action buttons.  objc_draw paints
+ * it in the redraw path and objc_find hit-tests work-area clicks, so the
+ * whole feature is expressed with the shipped AES object calls and no custom
+ * widget code.  The transparent G_IBOX root spans the work area; the tab
+ * buttons occupy the left pane rows and the action buttons sit on the bottom
+ * strip, so one tree and one draw cover both.
+ */
+enum
+{
+  IRC_TB_ROOT = 0,
+  IRC_TB_TAB0,
+  IRC_TB_TAB1,
+  IRC_TB_TAB2,
+  IRC_TB_TAB3,
+  IRC_TB_TAB4,
+  IRC_TB_SEND,
+  IRC_TB_NAMES,
+  IRC_TB_PART,
+  IRC_TB_CLOSE,
+  IRC_TB_COUNT
+};
+
+#define IRC_TB_TAB_SLOTS  GEM_IRC_APP_BUFFERS	/* one button per buffer slot */
+#define IRC_TB_LABEL_MAX  16
+
+static OBJECT irc_tb_tree[IRC_TB_COUNT] __attribute__ ((aligned (2)));
+static BYTE irc_tb_label[IRC_TB_TAB_SLOTS][IRC_TB_LABEL_MAX + 1];
+static BYTE irc_tb_send[] = " Send ";
+static BYTE irc_tb_names[] = " Names ";
+static BYTE irc_tb_part[] = " Part ";
+static BYTE irc_tb_close[] = " Close ";
+static WORD irc_tb_ready;
+
+/* Pixel width of a NUL-terminated label without a runtime multiply. */
+static WORD
+irc_tb_text_px (const BYTE *text)
+{
+  WORD width;
+
+  width = 0;
+  while (*text++)
+    width += irc_character_width;
+  return width;
+}
+
+static VOID
+irc_tb_action (WORD index, WORD next, BYTE *label)
+{
+  OBJECT *object = &irc_tb_tree[index];
+
+  object->ob_next = next;
+  object->ob_head = NIL;
+  object->ob_tail = NIL;
+  object->ob_type = G_BUTTON;
+  object->ob_flags = SELECTABLE | EXIT;
+  object->ob_state = NORMAL;
+  object->ob_spec = gem_near_pointer_words (label);
+  object->ob_x = 0;
+  object->ob_y = 0;
+  object->ob_width = 0;
+  object->ob_height = 0;
+}
+
+/* Author the fixed sibling chain once; geometry is refreshed on every draw. */
+static VOID
+irc_tb_build (VOID)
+{
+  OBJECT *root = &irc_tb_tree[IRC_TB_ROOT];
+  OBJECT *tab;
+  WORD index;
+
+  root->ob_next = NIL;
+  root->ob_head = IRC_TB_TAB0;
+  root->ob_tail = IRC_TB_CLOSE;
+  root->ob_type = G_IBOX;		/* transparent container, no paint */
+  root->ob_flags = NONE;
+  root->ob_state = NORMAL;
+  root->ob_spec.lo = 0;
+  root->ob_spec.hi = 0;
+  root->ob_x = 0;
+  root->ob_y = 0;
+  root->ob_width = 0;
+  root->ob_height = 0;
+
+  index = 0;
+  while (index < IRC_TB_TAB_SLOTS)
+    {
+      tab = &irc_tb_tree[IRC_TB_TAB0 + index];
+      irc_tb_label[index][0] = '\0';
+      tab->ob_next = IRC_TB_TAB0 + index + 1;	/* last tab -> IRC_TB_SEND */
+      tab->ob_head = NIL;
+      tab->ob_tail = NIL;
+      tab->ob_type = G_BUTTON;
+      tab->ob_flags = SELECTABLE | EXIT | HIDETREE;	/* hidden until used */
+      tab->ob_state = NORMAL;
+      tab->ob_spec = gem_near_pointer_words (irc_tb_label[index]);
+      tab->ob_x = 0;
+      tab->ob_y = 0;
+      tab->ob_width = 0;
+      tab->ob_height = 0;
+      index++;
+    }
+
+  irc_tb_action (IRC_TB_SEND, IRC_TB_NAMES, irc_tb_send);
+  irc_tb_action (IRC_TB_NAMES, IRC_TB_PART, irc_tb_names);
+  irc_tb_action (IRC_TB_PART, IRC_TB_CLOSE, irc_tb_part);
+  irc_tb_action (IRC_TB_CLOSE, IRC_TB_ROOT, irc_tb_close);
+  irc_tb_tree[IRC_TB_CLOSE].ob_flags |= LASTOB;
+  irc_tb_ready = 1;
+}
+
+static VOID
+irc_tb_ensure (VOID)
+{
+  if (!irc_tb_ready)
+    irc_tb_build ();
+}
+
+/* Copy a tab label, prefixing an unread private buffer with a star. */
+static VOID
+irc_tb_set_label (WORD slot, const char *name, WORD activity)
+{
+  BYTE *destination = irc_tb_label[slot];
+  WORD length = 0;
+
+  if (activity)
+    destination[length++] = '*';
+  while (*name && length < IRC_TB_LABEL_MAX)
+    destination[length++] = (BYTE) *name++;
+  destination[length] = '\0';
+}
+
+static VOID
+irc_tb_place (WORD index, WORD x, WORD y, WORD width, WORD height, WORD state)
+{
+  OBJECT *object = &irc_tb_tree[index];
+
+  object->ob_x = (UWORD) x;
+  object->ob_y = (UWORD) y;
+  object->ob_width = (UWORD) width;
+  object->ob_height = (UWORD) height;
+  object->ob_state = state;
+  object->ob_flags &= ~HIDETREE;
+}
+
+/*
+ * Refresh tab and button geometry for the current work area.  Object
+ * coordinates are relative to the root, which is pinned to the work origin,
+ * so each tab row and each button rectangle is one bounded subtraction from a
+ * screen-clamped edge.  Tabs beyond the open buffer count, or below the
+ * editor, are hidden with HIDETREE so objc_draw and objc_find skip them.
+ */
+static VOID
+irc_tb_layout (VOID)
+{
+  OBJECT *root = &irc_tb_tree[IRC_TB_ROOT];
+  OBJECT *tab;
+  WORD topic_bottom;
+  WORD input_top;
+  WORD toolbar_top;
+  WORD tab_height;
+  WORD tab_y;
+  WORD button_y;
+  WORD button_height;
+  WORD button_x;
+  WORD button_width;
+  WORD count;
+  WORD active;
+  WORD index;
+
+  irc_tb_ensure ();
+  topic_bottom = irc_work.g_y + irc_character_height + IRC_TOPIC_PADDING;
+  input_top = irc_input_top_y ();
+  toolbar_top = irc_toolbar_top_y ();
+  tab_height = irc_character_height + 2;
+  tab_y = topic_bottom + irc_character_height - irc_work.g_y;
+  count = (WORD) gem_irc_app_buffer_count (&irc_app);
+  active = (WORD) gem_irc_app_active_index (&irc_app);
+
+  index = 0;
+  while (index < IRC_TB_TAB_SLOTS)
+    {
+      tab = &irc_tb_tree[IRC_TB_TAB0 + index];
+      if (index < count && irc_work.g_y + tab_y + tab_height < input_top)
+	{
+	  irc_tb_set_label (index,
+			    gem_irc_app_buffer_label (&irc_app,
+						      (GEM_IRC_UWORD) index),
+			    gem_irc_app_buffer_activity (&irc_app,
+							 (GEM_IRC_UWORD)
+							 index));
+	  irc_tb_place (IRC_TB_TAB0 + index, 2, tab_y,
+			IRC_SIDE_WIDTH - 4, tab_height,
+			index == active ? SELECTED : NORMAL);
+	  tab_y += tab_height;
+	}
+      else
+	tab->ob_flags |= HIDETREE;
+      index++;
+    }
+
+  button_y = toolbar_top - irc_work.g_y + 1;
+  button_height = irc_character_height + 2;
+  button_x = 4;
+  button_width = irc_tb_text_px (irc_tb_send) + 8;
+  irc_tb_place (IRC_TB_SEND, button_x, button_y, button_width,
+		button_height, NORMAL);
+  button_x += button_width + 4;
+  button_width = irc_tb_text_px (irc_tb_names) + 8;
+  irc_tb_place (IRC_TB_NAMES, button_x, button_y, button_width,
+		button_height, NORMAL);
+  button_x += button_width + 4;
+  button_width = irc_tb_text_px (irc_tb_part) + 8;
+  irc_tb_place (IRC_TB_PART, button_x, button_y, button_width,
+		button_height, NORMAL);
+  button_x += button_width + 4;
+  button_width = irc_tb_text_px (irc_tb_close) + 8;
+  irc_tb_place (IRC_TB_CLOSE, button_x, button_y, button_width,
+		button_height, NORMAL);
+
+  root->ob_x = (UWORD) irc_work.g_x;
+  root->ob_y = (UWORD) irc_work.g_y;
+  root->ob_width = (UWORD) irc_work.g_w;
+  root->ob_height = (UWORD) irc_work.g_h;
+}
+
+static VOID
+irc_tb_draw (VOID)
+{
+  irc_tb_layout ();
+  objc_draw (irc_tb_tree, ROOT, MAX_DEPTH, irc_work.g_x, irc_work.g_y,
+	     irc_work.g_w, irc_work.g_h);
+}
+
+/*
+ * Dispatch one left-button click through objc_find.  A tab switches buffers;
+ * an action button submits, refreshes names, parts/closes, or closes the
+ * private tab.  A click that lands on the transparent root or on nothing is
+ * left for the caller (the AES input field) to consume.
+ */
+static WORD
+irc_tb_click (WORD mouse_x, WORD mouse_y)
+{
+  WORD hit;
+  WORD slot;
+
+  irc_tb_ensure ();
+  hit = objc_find (irc_tb_tree, ROOT, MAX_DEPTH, mouse_x, mouse_y);
+  if (hit < IRC_TB_TAB0)
+    return 0;
+  if (hit <= IRC_TB_TAB4)
+    {
+      slot = hit - IRC_TB_TAB0;
+      if ((GEM_IRC_UWORD) slot < gem_irc_app_buffer_count (&irc_app))
+	gem_irc_app_switch (&irc_app, (GEM_IRC_UWORD) slot);
+      return 1;
+    }
+  switch (hit)
+    {
+    case IRC_TB_SEND:
+      (void) gem_irc_app_submit (&irc_app);
+      break;
+    case IRC_TB_NAMES:
+      (void) gem_irc_app_names (&irc_app);
+      break;
+    case IRC_TB_PART:
+      (void) gem_irc_app_part_active (&irc_app);
+      break;
+    case IRC_TB_CLOSE:
+      (void) gem_irc_app_close_buffer (&irc_app,
+				       gem_irc_app_active_index (&irc_app));
+      break;
+    default:
+      return 0;
+    }
+  return 1;
+}
+
+/*
  * VDI text has no right-edge argument.  Copy only the visible columns into
  * one static 80-byte scratch line so transcript, channel, nick, and editor
  * text cannot paint through an adjacent HexChat-style pane.  The copy clips
@@ -808,8 +1121,7 @@ irc_draw_content (VOID)
   irc_fill (irc_work.g_x, irc_work.g_y, irc_work.g_w, irc_work.g_h, WHITE);
   left_edge = irc_work.g_x + IRC_SIDE_WIDTH;
   right_edge = irc_work.g_x + irc_work.g_w - IRC_SIDE_WIDTH;
-  input_top = irc_work.g_y + irc_work.g_h
-    - irc_character_height - IRC_INPUT_PADDING;
+  input_top = irc_input_top_y ();
   topic_bottom = irc_work.g_y + irc_character_height + IRC_TOPIC_PADDING;
   center_width = right_edge - left_edge - IRC_PANE_PADDING - IRC_PANE_PADDING;
 
@@ -841,46 +1153,44 @@ irc_draw_content (VOID)
 				   GEM_IRC_NICK_SIZE - 1U);
   vst_color (irc_vdi, WHITE);
   v_gtext (irc_vdi, irc_work.g_x + IRC_PANE_PADDING,
-	   irc_work.g_y + irc_character_height, (BYTE *) "NET");
+	   irc_work.g_y + irc_character_height, (BYTE *) "CHATS");
   v_gtext (irc_vdi, right_edge + IRC_PANE_PADDING,
 	   irc_work.g_y + irc_character_height, (BYTE *) "USERS");
 
-  /* Left network tree and its selected target row. */
-  vst_color (irc_vdi, BLACK);
-  y = topic_bottom + irc_character_height;
-  irc_draw_limited (irc_work.g_x + IRC_PANE_PADDING, y,
-		    (const char *) irc_server, pane_columns);
+  /*
+   * The left pane's conversation tabs are native G_BUTTON objects drawn by
+   * irc_tb_draw() below, so no text list is painted here; the pane background
+   * and its divider stay hand-drawn beneath those buttons.
+   */
 
-  /* Right roster is populated by 353 and maintained by membership events. */
-  nick_count = (UWORD) irc_app.nick_count;
-  nick_slot = irc_app.nicks;
-  y = topic_bottom + irc_character_height;
-  row = 0;
-  while (row < nick_count && y < input_top - 2)
+  /* Right roster is meaningful only while a channel buffer is active. */
+  if (gem_irc_app_active_kind (&irc_app) == GEM_IRC_APP_BUFFER_CHANNEL)
     {
-      nick = nick_slot->text;
-      irc_draw_limited (right_edge + IRC_PANE_PADDING, y, nick, pane_columns);
-      nick_slot++;
-      y += irc_character_height;
-      row++;
+      nick_count = (UWORD) irc_app.nick_count;
+      nick_slot = irc_app.nicks;
+      y = topic_bottom + irc_character_height;
+      row = 0;
+      while (row < nick_count && y < input_top - 2)
+	{
+	  nick = nick_slot->text;
+	  irc_draw_limited (right_edge + IRC_PANE_PADDING, y, nick,
+			    pane_columns);
+	  nick_slot++;
+	  y += irc_character_height;
+	  row++;
+	}
+      if (irc_app.nick_overflow)
+	irc_draw_limited (right_edge + IRC_PANE_PADDING,
+			  input_top - 2, "+ more", pane_columns);
     }
-  if (irc_app.nick_overflow)
-    irc_draw_limited (right_edge + IRC_PANE_PADDING,
-		      input_top - 2, "+ more", pane_columns);
 
   target = gem_irc_app_target (&irc_app);
   if (!target || !*target)
     target = (const char *) irc_channel;
-  y = topic_bottom + irc_character_height;
-  y += irc_character_height;
-  irc_fill (irc_work.g_x + 2, y - irc_character_height + 2,
-	    IRC_SIDE_WIDTH - 4, irc_character_height, BLUE);
-  vst_color (irc_vdi, WHITE);
-  irc_draw_limited (irc_work.g_x + IRC_PANE_PADDING, y, target, pane_columns);
 
   /* Topic/status strip: retained topic when known, then target fallback. */
   vst_color (irc_vdi, WHITE);
-  topic = irc_app.topic;
+  topic = gem_irc_app_topic (&irc_app);
   if (!topic || !*topic)
     topic = target;
   columns = irc_text_columns (center_width - 88,
@@ -963,6 +1273,19 @@ irc_draw_content (VOID)
   xy[3] = input_top + irc_character_height + 2;
   v_pline (irc_vdi, 2, xy);
 #endif
+
+  /* Bottom toolbar: a ruled separator, then the native GEM action buttons. */
+  {
+    WORD toolbar_top = irc_toolbar_top_y ();
+
+    vsl_color (irc_vdi, BLACK);
+    xy[0] = irc_work.g_x;
+    xy[1] = toolbar_top;
+    xy[2] = irc_work.g_x + irc_work.g_w - 1;
+    xy[3] = toolbar_top;
+    v_pline (irc_vdi, 2, xy);
+  }
+  irc_tb_draw ();
 }
 
 static VOID
@@ -1410,10 +1733,18 @@ irc_event_loop (VOID)
 						      "Keyboard close");
 		}
 	    }
-#if defined(IRC_AES_INPUT) && IRC_AES_INPUT
 	  if (events & MU_BUTTON)
-	    irc_aes_click ((WORD) irc_event_mouse_x, (WORD) irc_event_mouse_y);
+	    {
+	      WORD acted = irc_tb_click ((WORD) irc_event_mouse_x,
+					 (WORD) irc_event_mouse_y);
+#if defined(IRC_AES_INPUT) && IRC_AES_INPUT
+	      if (!acted)
+		irc_aes_click ((WORD) irc_event_mouse_x,
+			       (WORD) irc_event_mouse_y);
+#else
+	      (void) acted;
 #endif
+	    }
 	  /* Consume every controller region exactly once in this event turn. */
 	  dirty_regions = (UWORD) gem_irc_app_take_dirty (&irc_app);
 	  irc_queue_app_redraw (dirty_regions);

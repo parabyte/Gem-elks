@@ -26,7 +26,13 @@
 
 #include "gem_irc_protocol.h"
 
-#define GEM_IRC_APP_SCROLL_LINES       40U
+/*
+ * Scrollback is now owned per conversation buffer.  Thirty-two 97-byte rows
+ * cost 3104 bytes per buffer; five buffers therefore hold 160 total rows,
+ * four times the former single ring, while every count remains a scale-one
+ * unsigned 16-bit line index that cannot wrap its bounded array.
+ */
+#define GEM_IRC_APP_SCROLL_LINES       32U
 #define GEM_IRC_APP_DISPLAY_SIZE       96U
 #define GEM_IRC_APP_INPUT_SIZE         160U
 #define GEM_IRC_APP_TARGET_SIZE        64U
@@ -39,6 +45,20 @@
  */
 #define GEM_IRC_APP_POLL_DEFAULT       64U
 #define GEM_IRC_APP_NICK_SLOTS         12U
+
+/*
+ * One channel/status buffer plus up to four private-message buffers.  Each
+ * incoming PRIVMSG addressed to our own nick opens (or reuses) one bounded
+ * PRIVATE buffer keyed by the sender; a full table routes overflow back to
+ * the main buffer instead of allocating.  The count is a scale-one buffer
+ * index; buffer zero is permanent and is never freed or moved.
+ */
+#define GEM_IRC_APP_BUFFERS            5U
+
+#define GEM_IRC_APP_BUFFER_FREE        0U
+#define GEM_IRC_APP_BUFFER_SERVER      1U
+#define GEM_IRC_APP_BUFFER_CHANNEL     2U
+#define GEM_IRC_APP_BUFFER_PRIVATE     3U
 
 #define GEM_IRC_APP_LINE_NORMAL        0U
 #define GEM_IRC_APP_LINE_STATUS        1U
@@ -62,7 +82,8 @@
 #define GEM_IRC_APP_DIRTY_TARGET       0x04U
 #define GEM_IRC_APP_DIRTY_ROSTER       0x08U
 #define GEM_IRC_APP_DIRTY_TOPIC        0x10U
-#define GEM_IRC_APP_DIRTY_ALL          0x1fU
+#define GEM_IRC_APP_DIRTY_TABS         0x20U
+#define GEM_IRC_APP_DIRTY_ALL          0x3fU
 
 typedef GEM_IRC_WORD (*GEM_IRC_APP_WRITE) (void *context,
 					   const char *line,
@@ -105,9 +126,32 @@ typedef struct gem_irc_app_nick
 } GEM_IRC_APP_NICK;
 
 /*
- * Keep this object in static near data.  Its largest member is the bounded
- * scrollback (40 by 96 bytes), followed by the protocol's two 513-byte line
- * buffers.  Nothing in the native app is placed on the small ELKS heap.
+ * One conversation buffer: a bounded scrollback ring with its own target
+ * name, retained topic, unread-activity marker, and scroll viewport.  kind
+ * selects FREE, SERVER, CHANNEL, or PRIVATE.  Buffer zero is the permanent
+ * server/channel buffer whose roster is the app-global nick table; PRIVATE
+ * buffers carry no roster.  Each buffer is 3272 near bytes and holds no
+ * pointer, so a whole buffer may be moved by plain structure assignment when
+ * a private tab is closed.
+ */
+typedef struct gem_irc_app_buffer
+{
+  GEM_IRC_UBYTE kind;
+  GEM_IRC_UBYTE activity;
+  GEM_IRC_UWORD line_head;
+  GEM_IRC_UWORD line_count;
+  GEM_IRC_UWORD scroll_offset;
+  char name[GEM_IRC_APP_TARGET_SIZE];
+  char topic[GEM_IRC_APP_DISPLAY_SIZE];
+  GEM_IRC_APP_LINE lines[GEM_IRC_APP_SCROLL_LINES];
+} GEM_IRC_APP_BUFFER;
+
+/*
+ * Keep this object in static near data.  Its largest members are the five
+ * bounded conversation buffers, followed by the protocol's two 513-byte line
+ * buffers.  Nothing in the native app is placed on the small ELKS heap.  The
+ * active index selects the drawn buffer; the roster stays app-global because
+ * only buffer zero is ever a channel in this port.
  */
 typedef struct gem_irc_app
 {
@@ -116,23 +160,20 @@ typedef struct gem_irc_app
   GEM_IRC_UBYTE connected;
   GEM_IRC_UBYTE closing;
   GEM_IRC_UBYTE dirty;
-  GEM_IRC_UWORD line_head;
-  GEM_IRC_UWORD line_count;
-  GEM_IRC_UWORD scroll_offset;
+  GEM_IRC_UBYTE active;
+  GEM_IRC_UBYTE buffer_count;
   GEM_IRC_UWORD display_columns;
   GEM_IRC_UWORD input_length;
   GEM_IRC_UWORD input_cursor;
   GEM_IRC_UBYTE nick_count;
   GEM_IRC_UBYTE nick_overflow;
-  char target[GEM_IRC_APP_TARGET_SIZE];
-  char topic[GEM_IRC_APP_DISPLAY_SIZE];
   char input[GEM_IRC_APP_INPUT_SIZE];
   char last_input[GEM_IRC_APP_INPUT_SIZE];
   char network_line[GEM_IRC_LINE_MAX + 1U];
   char command_line[GEM_IRC_APP_INPUT_SIZE];
   char format_line[GEM_IRC_APP_INPUT_SIZE];
   GEM_IRC_APP_NICK nicks[GEM_IRC_APP_NICK_SLOTS];
-  GEM_IRC_APP_LINE lines[GEM_IRC_APP_SCROLL_LINES];
+  GEM_IRC_APP_BUFFER buffers[GEM_IRC_APP_BUFFERS];
 } GEM_IRC_APP;
 
 void gem_irc_app_init (GEM_IRC_APP * app,
@@ -188,7 +229,33 @@ const GEM_IRC_APP_LINE *gem_irc_app_visible_line (const GEM_IRC_APP * app,
 const char *gem_irc_app_input (const GEM_IRC_APP * app);
 GEM_IRC_UWORD gem_irc_app_input_cursor (const GEM_IRC_APP * app);
 const char *gem_irc_app_target (const GEM_IRC_APP * app);
+const char *gem_irc_app_topic (const GEM_IRC_APP * app);
 GEM_IRC_WORD gem_irc_app_is_closing (const GEM_IRC_APP * app);
+
+/*
+ * Conversation-buffer navigation for the tab bar.  Indexes have scale one
+ * buffer and are always below the current count.  Switching or cycling clears
+ * the destination's unread marker and repaints the whole work area; closing a
+ * PRIVATE buffer compacts the table and never removes buffer zero.  Labels are
+ * the display name ("Server", a channel, or a nick) shown on each tab.
+ */
+GEM_IRC_UWORD gem_irc_app_buffer_count (const GEM_IRC_APP * app);
+GEM_IRC_UWORD gem_irc_app_active_index (const GEM_IRC_APP * app);
+GEM_IRC_UWORD gem_irc_app_active_kind (const GEM_IRC_APP * app);
+const char *gem_irc_app_buffer_label (const GEM_IRC_APP * app,
+				      GEM_IRC_UWORD index);
+GEM_IRC_UWORD gem_irc_app_buffer_kind (const GEM_IRC_APP * app,
+				       GEM_IRC_UWORD index);
+GEM_IRC_UWORD gem_irc_app_buffer_activity (const GEM_IRC_APP * app,
+					   GEM_IRC_UWORD index);
+void gem_irc_app_switch (GEM_IRC_APP * app, GEM_IRC_UWORD index);
+void gem_irc_app_cycle (GEM_IRC_APP * app, GEM_IRC_WORD direction);
+GEM_IRC_WORD gem_irc_app_close_buffer (GEM_IRC_APP * app, GEM_IRC_UWORD index);
+
+/* Toolbar actions: open a query tab, part or request names on the channel. */
+GEM_IRC_WORD gem_irc_app_query (GEM_IRC_APP * app, const char *nick);
+GEM_IRC_WORD gem_irc_app_part_active (GEM_IRC_APP * app);
+GEM_IRC_WORD gem_irc_app_names (GEM_IRC_APP * app);
 
 /* Return and clear the combined scale-one UI-region damage mask. */
 GEM_IRC_WORD gem_irc_app_take_dirty (GEM_IRC_APP * app);
