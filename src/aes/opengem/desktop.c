@@ -740,6 +740,8 @@ WORD hndl_button(WORD clicks, 	// bp+1e
 	WNODE		*wn;			//bp+18
 	
 	done = FALSE;
+	if (acc_button(mx, my))
+	  return(FALSE);
 
 	wh = wind_find(mx, my);
 
@@ -1025,6 +1027,8 @@ WORD hndl_msg()
 	WORD		change, menu;
 	
 	done = change = menu = FALSE;
+	if (acc_message(G.g_rmsg))
+	  return(FALSE);
 	if ( G.g_rmsg[0] == WM_CLOSED && ig_close )
 	{
 	  ig_close = FALSE;
@@ -1563,6 +1567,7 @@ WORD GEMAIN(WORD ARGC, BYTE *ARGV[])
 	// not done in DESKTOP v1.2 wind_update(END_UPDATE);
 	men_update(G.a_trees[ADMENU]); 
 	menu_bar(G.a_trees[ADMENU], TRUE);
+	acc_menu_init();
 						/* get ready for main	*/
 						/*   loop		*/
 	flags = MU_BUTTON | MU_MESAG | MU_KEYBD;
@@ -1577,13 +1582,20 @@ WORD GEMAIN(WORD ARGC, BYTE *ARGV[])
 	while( !done )
 	{
 						/* block for input	*/
-	  ev_which = evnt_multi(flags, 0x02, 0x01, 0x01,
+	  {
+	    WORD tflags = flags;
+	    WORD tlo = 0;
+	    if (acc_clock_open()) { tflags |= MU_TIMER; tlo = 1000; }
+	    ev_which = evnt_multi(tflags, 0x02, 0x01, 0x01,
 				0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-				G.a_rmsg, 0, 0, 
+				G.a_rmsg, tlo, 0,
 				&mx, &my, &button, &kstate, &kret, &bret);
+	  }
 
 						/* grab the screen	*/
 	  wind_update(BEG_UPDATE);
+	  if (ev_which & MU_TIMER)
+	    acc_timer();
 						/* handle keybd message */
 	  if (ev_which & MU_KEYBD)
 	    done = hndl_kbd(kret);

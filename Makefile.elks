@@ -125,6 +125,15 @@ DESKTOP_SEAM_SRCS := \
 	src/aes/gemdos_posix.c \
 	src/aes/gem_wordpair.c
 
+# Built-in desk accessories (Calculator, Clock) hosted inside the Desktop.
+# Like the standalone GEM applications they use libc time and 32-bit scalars,
+# so they link into gemdesk but stay outside the resident-core source and
+# codegen gates that forbid wide scalars on the AES hot paths.
+DESKTOP_ACC_SRCS := \
+	src/aes/opengem/deskacc.c
+DESKTOP_ACC_OBJECTS := \
+	$(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(DESKTOP_ACC_SRCS))
+
 # Desktop-side pipe transport and client entry point, compiled with the
 # binding (far-data) profile.
 CLIENT_SRCS := \
@@ -150,8 +159,27 @@ CLIENT_OBJECTS := \
 # which forbid wide scalars on the kernel/AES hot paths.
 APP_SRCS := \
 	src/apps/gemclock.c \
-	src/apps/gemcalc.c
+	src/apps/gemcalc.c \
+	src/apps/gemview.c
 APP_OBJECTS := $(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(APP_SRCS))
+
+# GEM IRC client (ported from the GemOS userland).  A separate GEM client that
+# reuses the shared client transport and bindings like the other apps, plus its
+# own KTCP socket transport (C + one 8086 far-ABI assembly seam).  It uses libc
+# sockets and 32-bit epoch/IPv4 scalars, so it stays outside the resident XT
+# gates like the other applications.
+IRC_SRCS := \
+	src/aes/apps/irc/gem_irc.c \
+	src/aes/apps/irc/gem_irc_app.c \
+	src/aes/apps/irc/gem_irc_protocol.c \
+	src/aes/apps/irc/gem_irc_transport_elks.c
+IRC_ASM_SRCS := src/aes/apps/irc/gem_irc_transport_elks_abi.S
+IRC_OBJECTS := $(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(IRC_SRCS)) \
+	$(patsubst src/%.S,$(TRAP_OBJ_DIR)/%.o,$(IRC_ASM_SRCS))
+# Use the client's own hand-drawn input editor rather than the AES OBJC_EDIT
+# path; the latter's cross-process editable field does not drive text over the
+# pipe transport on stock ELKS.
+$(IRC_OBJECTS): CPPFLAGS += -DIRC_AES_INPUT=0
 CLIENT_TRANSPORT_OBJECT := $(TRAP_OBJ_DIR)/bindings/gem_client.o
 APP_RUNTIME_OBJECT := $(TRAP_OBJ_DIR)/apps/gem_app_vdi.o \
 	$(TRAP_OBJ_DIR)/aes/gem_wordpair.o
@@ -163,6 +191,8 @@ GEM := $(BIN_DIR)/gem
 GEMDESK := $(BIN_DIR)/gemdesk
 GEMCLOCK := $(BIN_DIR)/gemclock
 GEMCALC := $(BIN_DIR)/gemcalc
+GEMVIEW := $(BIN_DIR)/gemview
+GEMIRC := $(BIN_DIR)/gemirc
 LIBVDI := $(LIB_DIR)/libvdi.a
 LIBGEMTRAP := $(LIB_DIR)/libgemtrap.a
 ALL_OBJECTS := $(VDI_OBJECTS) $(VDI_ASM_OBJECTS) $(RESIDENT_OBJECTS) \
@@ -175,7 +205,7 @@ ALL_SRCS := $(VDI_SRCS) $(VDI_ASM_SRCS) $(RESIDENT_SRCS) \
 .PHONY: all audit source-audit asset-audit codegen-audit lineage-audit \
 	install clean
 
-all: $(GEM) $(GEMDESK) $(GEMCLOCK) $(GEMCALC)
+all: $(GEM) $(GEMDESK) $(GEMCLOCK) $(GEMCALC) $(GEMVIEW) $(GEMIRC)
 
 audit: source-audit asset-audit codegen-audit lineage-audit
 
@@ -226,7 +256,12 @@ $(TRAP_OBJ_DIR)/%.o: src/%.c
 	$(CC) $(CPPFLAGS) -DGEM_TRAP_FAR_DATA=1 -DGEM_DIRECT=1 \
 		$(CFLAGS) -c $< -o $@
 
-$(DESKTOP_OBJECTS): $(wildcard src/aes/opengem/*.h) \
+$(TRAP_OBJ_DIR)/%.o: src/%.S
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -DGEM_TRAP_FAR_DATA=1 -DGEM_DIRECT=1 \
+		$(CFLAGS) -c $< -o $@
+
+$(DESKTOP_OBJECTS) $(DESKTOP_ACC_OBJECTS): $(wildcard src/aes/opengem/*.h) \
 	$(wildcard src/include/*.h)
 
 $(GEM): $(RESIDENT_OBJECTS) $(LIBVDI)
@@ -239,8 +274,8 @@ $(GEM): $(RESIDENT_OBJECTS) $(LIBVDI)
 		$(RESIDENT_OBJECTS) $(LIBVDI)
 	OBJDUMP86=$(OBJDUMP86) ./scripts/check-small-model.sh $@
 
-$(GEMDESK): $(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) $(CLIENT_OBJECTS) \
-		$(LIBGEMTRAP)
+$(GEMDESK): $(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) $(DESKTOP_ACC_OBJECTS) \
+		$(CLIENT_OBJECTS) $(LIBGEMTRAP)
 	@mkdir -p $(dir $@) $(MAP_DIR)
 	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
 		-msegment-relocation-stuff \
@@ -248,7 +283,7 @@ $(GEMDESK): $(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) $(CLIENT_OBJECTS) \
 		-Wl,--gc-sections -Wl,--icf=all \
 		-Wl,-Map,$(MAP_DIR)/gemdesk.map -o $@ \
 		$(CLIENT_OBJECTS) $(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) \
-		$(LIBGEMTRAP)
+		$(DESKTOP_ACC_OBJECTS) $(LIBGEMTRAP)
 	OBJDUMP86=$(OBJDUMP86) ./scripts/check-small-model.sh $@
 
 $(GEMCLOCK): $(TRAP_OBJ_DIR)/apps/gemclock.o $(CLIENT_TRANSPORT_OBJECT) \
@@ -275,12 +310,37 @@ $(GEMCALC): $(TRAP_OBJ_DIR)/apps/gemcalc.o $(CLIENT_TRANSPORT_OBJECT) \
 		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
 	OBJDUMP86=$(OBJDUMP86) ./scripts/check-small-model.sh $@
 
+$(GEMVIEW): $(TRAP_OBJ_DIR)/apps/gemview.o $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+	@mkdir -p $(dir $@) $(MAP_DIR)
+	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
+		-msegment-relocation-stuff \
+		-maout-stack=4096 -maout-heap=8192 \
+		-Wl,--gc-sections -Wl,--icf=all \
+		-Wl,-Map,$(MAP_DIR)/gemview.map -o $@ \
+		$(TRAP_OBJ_DIR)/apps/gemview.o $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+	OBJDUMP86=$(OBJDUMP86) ./scripts/check-small-model.sh $@
+
+$(GEMIRC): $(IRC_OBJECTS) $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+	@mkdir -p $(dir $@) $(MAP_DIR)
+	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
+		-msegment-relocation-stuff \
+		-maout-stack=4096 -maout-heap=2048 \
+		-Wl,--gc-sections -Wl,--icf=all \
+		-Wl,-Map,$(MAP_DIR)/gemirc.map -o $@ \
+		$(IRC_OBJECTS) $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+	OBJDUMP86=$(OBJDUMP86) ./scripts/check-small-model.sh $@
+
 install: all
 	install -d $(DESTDIR)/bin $(DESTDIR)/etc $(DESTDIR)/GEMAPPS/GEMSYS
 	install -m 755 $(GEM) $(DESTDIR)/bin/gem
 	install -m 755 $(GEMDESK) $(DESTDIR)/bin/gemdesk
 	install -m 755 $(GEMCLOCK) $(DESTDIR)/bin/gemclock
 	install -m 755 $(GEMCALC) $(DESTDIR)/bin/gemcalc
+	install -m 755 $(GEMVIEW) $(DESTDIR)/bin/gemview
 	install -m 644 assets/GEMAPPS/GEMSYS/DESKTOP.INF $(DESTDIR)/etc/DESKTOP.INF
 	install -m 644 assets/GEMAPPS/GEMSYS/DESKTOP.RSC \
 		assets/GEMAPPS/GEMSYS/DESKHI.ICN \

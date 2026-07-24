@@ -159,6 +159,9 @@ gem_server_close_pipes(VOID)
  * ordinary fork; only descriptor moves, the raw exec, and _exit run in the
  * child either way.
  */
+/* The launch argv tail forwarded to the initial client, or NULL. */
+static char *const *gem_initial_argv;
+
 static WORD
 gem_server_spawn(const char *program, UWORD *child_pid)
 {
@@ -175,10 +178,19 @@ gem_server_spawn(const char *program, UWORD *child_pid)
 	}
 	child = vfork();
 	if (child == (pid_t) 0) {
-		char *child_argv[2];
+		char *default_argv[2];
+		char *const *child_argv;
 
-		child_argv[0] = (char *) program;
-		child_argv[1] = (char *) 0;
+		default_argv[0] = (char *) program;
+		default_argv[1] = (char *) 0;
+		child_argv = (char *const *) default_argv;
+		/*
+		 * Forward the launch tail to the initial client, so
+		 * "gem /bin/gemirc <server> <channel>" reaches the program.
+		 */
+		if (gem_initial_argv && gem_initial_argv[0]
+		    && !strcmp(gem_initial_argv[0], program))
+			child_argv = gem_initial_argv;
 		if (dup2(request_pipe[1], GEM_SERVER_REQUEST_FD) < 0
 		    || dup2(reply_pipe[0], GEM_SERVER_REPLY_FD) < 0)
 			_exit(126);
@@ -400,8 +412,19 @@ main(int argc, char **argv)
 	WORD status;
 	WORD is_gem;
 	WORD spawning_desktop;
+	const char *initial_client;
 
-	(void) argc;
+	/*
+	 * The initial client is the Desktop by default, but an absolute path
+	 * given on the command line replaces it - e.g. "gem /bin/gemview"
+	 * brings the machine up as a single full-screen GEM application (the
+	 * browser) instead of the Desktop, which leaves room for ktcp.
+	 */
+	initial_client = gem_server_desktop;
+	if (argc > 1 && argv[1] && argv[1][0] == '/') {
+		initial_client = argv[1];
+		gem_initial_argv = (char *const *) (argv + 1);
+	}
 	/*
 	 * Original GEM ran with GEMSYS as the current directory; the Desktop
 	 * client and every launched program inherit it.
@@ -416,7 +439,7 @@ main(int argc, char **argv)
 		return 1;
 
 	{
-		const char *d = gem_server_desktop;
+		const char *d = initial_client;
 		UBYTE *p = program;
 		while ((*p++ = (UBYTE) *d++) != 0)
 			;
@@ -487,9 +510,9 @@ main(int argc, char **argv)
 			break;		/* Desktop quit cleanly. */
 		}
 
-		/* Default next client is the Desktop. */
+		/* Default next client is the initial one (Desktop or browser). */
 		{
-			const char *d = gem_server_desktop;
+			const char *d = initial_client;
 			UBYTE *p = program;
 			while ((*p++ = (UBYTE) *d++) != 0)
 				;

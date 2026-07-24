@@ -33,6 +33,13 @@ VOID r_get(GRECT *r, WORD *x, WORD *y, WORD *w, WORD *h);
 WNODE *win_ith(WORD i);
 VOID men_list(LPTREE mlist, BYTE *dlist, WORD enable);
 
+/* deskacc.c - built-in desk accessories (Calculator, Clock) */
+VOID acc_menu_init(VOID);
+WORD acc_message(WORD *rmsg);
+WORD acc_button(WORD mx, WORD my);
+VOID acc_timer(VOID);
+WORD acc_clock_open(VOID);
+
 /* deskdir.c */
 VOID show_hide(WORD fmd, LPTREE tree);
 

@@ -350,6 +350,7 @@ gem src/bindings/original/ppdg017.c menu_bar
 gem src/bindings/original/ppdg018.c menu_icheck
 gem src/bindings/original/ppdg019.c menu_ienable
 gem src/bindings/original/ppdg020.c menu_tnormal
+gem src/bindings/original/ppdg021.c menu_register
 gem src/bindings/original/ppdg024.c objc_add
 gem src/bindings/original/ppdg025.c objc_delete
 gem src/bindings/original/ppdg026.c objc_draw
