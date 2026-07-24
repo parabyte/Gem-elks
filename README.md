@@ -58,11 +58,15 @@ make -f Makefile.elks ELKS_ROOT=/path/to/elks audit
 The build produces:
 
 ```text
-build/bin/gem
-build/bin/gemdesk
+build/bin/gem        AES/VDI server and single-tasking shell
+build/bin/gemdesk    the GEM Desktop client
+build/bin/gemclock   Clock
+build/bin/gemcalc    Calculator
+build/bin/gemview    web browser
+build/bin/gemirc     IRC client
 ```
 
-`make install DESTDIR=...` installs `/bin/gem`, `/bin/gemdesk`,
+`make install DESTDIR=...` installs those binaries under `/bin`,
 `/etc/DESKTOP.INF`, and the `/GEMAPPS/GEMSYS` resources.  See
 [BUILDING.md](BUILDING.md) and
 [docs/ELKS-INTEGRATION.md](docs/ELKS-INTEGRATION.md) for adding GEM to ELKS
@@ -77,6 +81,57 @@ disk images as an optional external application.
 `gem` starts the Desktop itself.  Quitting the Desktop returns to the
 shell; launching a program suspends graphics, runs it full screen, and
 returns to a fresh Desktop, exactly like single-tasking GEM on DOS.
+
+### Running one application directly (`gem /program`)
+
+Give `gem` a program path as its first argument and it launches that single
+GEM application instead of the Desktop, forwarding any remaining arguments to
+it:
+
+```sh
+gem /program [arguments...]
+```
+
+The argument must begin with `/` (an absolute path); anything else is treated
+as an ordinary Desktop launch.  This mode exists mainly for the networked
+applications: the Desktop and the ELKS TCP/IP stack (`ktcp`) do not both fit
+in memory alongside the `gem` server on an XT-class machine, so a networked
+program is started on its own, which leaves room for `ktcp`.  Bring
+networking up first (configure `LOCALIP`/`GATEWAY` in `/bootopts` and start
+`ktcp`) so name resolution and sockets work.
+
+**Web browser.**  The browser takes no arguments; type a URL, or a plain
+search query, into the address bar and press Return:
+
+```sh
+gem /bin/gemview
+```
+
+It fetches over plain HTTP (HTTP/1.0, chunked transfer and redirects
+handled), renders a cut-down HTML page, follows links, submits simple forms,
+and keeps a short Back history.  There is no TLS, so it speaks to plain-HTTP
+sites; bare queries are routed through a plain-HTTP search service.
+
+**IRC client.**  The client accepts an optional server, channel, nick, and
+port; every field has a default, so no argument is required:
+
+```sh
+gem /bin/gemirc [server [channel [nick [port]]]]
+gem /bin/gemirc irc.example.net
+gem /bin/gemirc 10.0.2.2 mychannel guest 6667
+```
+
+Defaults are server `irc.starlink-irc.org`, channel `#parabytetest`, an
+automatic `GEMxxxx` nick, and port `6667`.  It connects and registers, joins
+the channel, and shows a native GEM tab bar (one tab per conversation) with
+`Send`, `Names`, `Part`, and `Close` buttons; an incoming private message
+opens its own tab, and `Ctrl-N`/`Ctrl-P` step between tabs from the keyboard.
+Note that most shells treat a leading `#` as a comment, so pass a channel
+name without the `#` or quote it (`'#chan'`); the default channel already
+includes its `#`.
+
+The Clock and Calculator are Desk accessories: open them from the Desktop's
+**Desk** menu rather than with `gem /program`.
 
 ## Scope
 

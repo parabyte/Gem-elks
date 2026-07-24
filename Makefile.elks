@@ -341,6 +341,7 @@ install: all
 	install -m 755 $(GEMCLOCK) $(DESTDIR)/bin/gemclock
 	install -m 755 $(GEMCALC) $(DESTDIR)/bin/gemcalc
 	install -m 755 $(GEMVIEW) $(DESTDIR)/bin/gemview
+	install -m 755 $(GEMIRC) $(DESTDIR)/bin/gemirc
 	install -m 644 assets/GEMAPPS/GEMSYS/DESKTOP.INF $(DESTDIR)/etc/DESKTOP.INF
 	install -m 644 assets/GEMAPPS/GEMSYS/DESKTOP.RSC \
 		assets/GEMAPPS/GEMSYS/DESKHI.ICN \
