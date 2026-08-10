@@ -1,0 +1,360 @@
+##############################################################################
+# Native GEM core for ELKS on 8088/8086 systems.
+#
+# The external ELKS tree supplies the ia16 compiler, ELKS libc, kernel headers,
+# and objdump86.  No ELKS source is copied into this repository.
+##############################################################################
+
+ELKS_ROOT ?= ../elks
+ELKS_CROSS ?= $(ELKS_ROOT)/cross/bin
+ELKS_TOOLS ?= $(ELKS_ROOT)/elks/tools/bin
+
+ifeq ($(origin CC),default)
+CC := $(ELKS_CROSS)/ia16-elf-gcc
+endif
+ifeq ($(origin AR),default)
+AR := $(ELKS_CROSS)/ia16-elf-ar
+endif
+
+OBJDUMP ?= $(ELKS_CROSS)/ia16-elf-objdump
+NM ?= $(ELKS_CROSS)/ia16-elf-nm
+export PATH := $(ELKS_TOOLS):$(PATH)
+BUILD_DIR ?= build
+OBJ_DIR := $(BUILD_DIR)/obj
+TRAP_OBJ_DIR := $(OBJ_DIR)/trap
+LIB_DIR := $(BUILD_DIR)/lib
+BIN_DIR := $(BUILD_DIR)/bin
+MAP_DIR := $(BUILD_DIR)/maps
+
+CPPFLAGS += \
+	-DELKS=1 \
+	-DUNIX=1 \
+	-DI8086=1 \
+	-DNDEBUG=1 \
+	-DMULTIAPP=0 \
+	-DSMALL_DATA=1 \
+	-I src/include \
+	-I src/aes \
+	-I src/vdi \
+	-I $(ELKS_ROOT)/libc/include \
+	-I $(ELKS_ROOT)/elks/include
+
+BINDINGS_CPPFLAGS := \
+	-I src/bindings/original \
+	-DUSER_INTIN=1
+
+OPTFLAGS ?= -Os
+EXTRA_CFLAGS := $(CFLAGS)
+override CFLAGS := \
+	$(OPTFLAGS) \
+	$(EXTRA_CFLAGS) \
+	-mcmodel=medium \
+	-melks-libc \
+	-march=i8086 \
+	-mtune=i8086 \
+	-msegment-relocation-stuff \
+	-fno-inline \
+	-ffunction-sections \
+	-fdata-sections \
+	-fno-builtin-printf \
+	-fno-builtin-fprintf \
+	-std=gnu89 \
+	-Wall \
+	-Wno-implicit-function-declaration \
+	-Wno-implicit-int \
+	-Wno-int-conversion \
+	-Wno-pointer-to-int-cast \
+	-Wno-int-to-pointer-cast \
+	-Wno-unused-function \
+	-Wno-unused-variable \
+	-Wno-unused-but-set-variable \
+	-Wno-missing-field-initializers
+
+ARFLAGS := rcs
+
+VDI_SRCS := \
+	src/vdi/gem_vdi.c \
+	src/vdi/gem_input.c \
+	src/vdi/drivers/gem_kbd_ansi.c \
+	src/vdi/drivers/gem_kbd_raw.c \
+	src/vdi/drivers/gem_mouse_ms.c \
+	src/vdi/drivers/gem_mouse_ps2.c \
+	src/vdi/drivers/gem_mouse_amstrad.c \
+	src/vdi/drivers/gem_pcvideo.c \
+	src/vdi/drivers/gem_video_common.c \
+	src/vdi/drivers/gem_video_planar.c \
+	src/vdi/drivers/gem_video_mono.c \
+	src/vdi/drivers/gem_video_cga.c \
+	src/vdi/drivers/gem_video_hercules.c
+
+VDI_ASM_SRCS := src/vdi/drivers/gem_pcvideo_asm.S
+
+RESIDENT_SRCS := \
+	src/aes/gem_aes_resident.c \
+	src/aes/gem_aes_tick.c \
+	src/aes/gem_pending.c \
+	src/aes/gem_menu_seam.c \
+	src/aes/gem_event_resident.c \
+	src/aes/gem_form_resident.c \
+	src/aes/gem_alert_resident.c \
+	src/aes/gem_fsel_resident.c \
+	src/aes/gem_graf_resident.c \
+	src/aes/gem_resident_memory.c \
+	src/aes/gem_aes_call.c \
+	src/aes/gem_rsc.c \
+	src/aes/gem_resource_resident.c \
+	src/aes/gem_scrap_resident.c \
+	src/aes/gem_system_resource.c \
+	src/aes/gem_tape_resident.c \
+	src/aes/gem_menu_object_resident.c \
+	src/aes/gem_menu_pull_resident.c \
+	src/aes/gem_shell_resident.c \
+	src/aes/gem_startup_resident.c \
+	src/aes/gem_object_resident.c \
+	src/aes/gem_window_resident.c \
+	src/aes/gem_far_resource_elks.c \
+	src/vdi/gem_vdi_resident.c \
+	src/vdi/gem_vdi_output.c \
+	src/vdi/gem_vdi_mouse.c \
+	src/vdi/gem_vdi_font.c \
+	src/vdi/gem_vdi_sysfont.c \
+	src/vdi/gem_vdi_text.c \
+	src/vdi/gem_vdi_palette.c \
+	src/vdi/gem_vdi_sound.c \
+	src/server/gem_main.c
+
+DESKTOP_SRCS := \
+	src/aes/opengem/desktop.c \
+	src/aes/opengem/desk1.c \
+	src/aes/opengem/deskact.c \
+	src/aes/opengem/deskfun.c \
+	src/aes/opengem/deskwin.c \
+	src/aes/opengem/deskpro.c \
+	src/aes/opengem/deskppd.c \
+	src/aes/opengem/deskobj.c \
+	src/aes/opengem/deskfpd.c \
+	src/aes/opengem/deskins.c \
+	src/aes/opengem/deskapp1.c \
+	src/aes/opengem/deskapp2.c \
+	src/aes/opengem/deskapp3.c \
+	src/aes/opengem/deskgraf.c \
+	src/aes/opengem/deskrsrc.c \
+	src/aes/opengem/deskinf.c \
+	src/aes/opengem/deskdir.c \
+	src/aes/opengem/deskgsx.c \
+	src/aes/opengem/desktype.c \
+	src/aes/opengem/deskcds.c \
+	src/aes/opengem/optimize.c \
+	src/aes/opengem/desksupp.c \
+	src/aes/opengem/deskiacc.c \
+	src/aes/opengem/gemdesk_posix.c
+
+DESKTOP_SEAM_SRCS := \
+	src/desktop/gemdos_posix.c \
+	src/bindings/gem_wordpair.c
+
+# Built-in desk accessories (Calculator, Clock) hosted inside the Desktop.
+# Like the standalone GEM applications they use libc time and 32-bit
+# scalars, so they link into gemdesk but stay outside the resident core.
+DESKTOP_ACC_SRCS := \
+	src/aes/opengem/deskacc.c
+DESKTOP_ACC_OBJECTS := \
+	$(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(DESKTOP_ACC_SRCS))
+
+# Desktop-side pipe transport and client entry point, compiled with the
+# binding (far-data) profile.
+CLIENT_SRCS := \
+	src/bindings/gem_client.c \
+	src/desktop/gemdesk_main.c
+
+# Only binding units selected by the final Desktop link are retained here.
+TRAP_BINDING_SRCS := $(wildcard src/bindings/original/*.c)
+# Classic AES/VDI bindings the pinned import left out; same wire ABI.
+COMPAT_BINDING_SRCS := \
+	src/bindings/gem_compat_aes.c \
+	src/bindings/gem_compat_vdi.c
+COMPAT_BINDING_OBJECTS := \
+	$(patsubst src/bindings/%.c,\
+		$(TRAP_OBJ_DIR)/bindings/%.o,$(COMPAT_BINDING_SRCS))
+
+VDI_OBJECTS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(VDI_SRCS))
+VDI_ASM_OBJECTS := $(patsubst src/%.S,$(OBJ_DIR)/%.o,$(VDI_ASM_SRCS))
+RESIDENT_OBJECTS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(RESIDENT_SRCS))
+DESKTOP_OBJECTS := $(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(DESKTOP_SRCS))
+DESKTOP_SEAM_OBJECTS := \
+	$(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(DESKTOP_SEAM_SRCS))
+CLIENT_OBJECTS := \
+	$(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(CLIENT_SRCS))
+
+# GEM applications: separate GEM clients that reuse the shared client
+# transport (gem_client.o) and the AES/VDI bindings.  They use libc time
+# and 32-bit epoch scalars, built for the 8086 like everything else.
+APP_SRCS := \
+	src/apps/gemclock.c \
+	src/apps/gemcalc.c \
+	src/apps/gemview/gemview.c \
+	src/apps/gemview/gemview_html.c \
+	src/apps/gemview/gemview_net.c
+APP_OBJECTS := $(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(APP_SRCS))
+GEMVIEW_OBJECTS := $(TRAP_OBJ_DIR)/apps/gemview/gemview.o \
+	$(TRAP_OBJ_DIR)/apps/gemview/gemview_html.o \
+	$(TRAP_OBJ_DIR)/apps/gemview/gemview_net.o
+
+# GEM IRC client (ported from the GemOS userland).  A separate GEM client
+# that reuses the shared client transport and bindings like the other apps,
+# plus its own KTCP socket transport (C + one 8086 far-ABI assembly seam).
+IRC_SRCS := \
+	src/apps/irc/gem_irc.c \
+	src/apps/irc/gem_irc_app.c \
+	src/apps/irc/gem_irc_protocol.c \
+	src/apps/irc/gem_irc_transport_elks.c \
+	src/apps/irc/gem_irc_transport_elks_net.c
+IRC_OBJECTS := $(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(IRC_SRCS))
+# Use the client's own hand-drawn input editor rather than the AES OBJC_EDIT
+# path; the latter's cross-process editable field does not drive text over the
+# pipe transport on stock ELKS.
+$(IRC_OBJECTS): CPPFLAGS += -DIRC_AES_INPUT=0
+CLIENT_TRANSPORT_OBJECT := $(TRAP_OBJ_DIR)/bindings/gem_client.o
+APP_RUNTIME_OBJECT := $(TRAP_OBJ_DIR)/apps/gem_app_vdi.o \
+	$(TRAP_OBJ_DIR)/bindings/gem_wordpair.o
+TRAP_BINDING_OBJECTS := \
+	$(patsubst src/bindings/original/%.c,\
+		$(TRAP_OBJ_DIR)/bindings/original/%.o,$(TRAP_BINDING_SRCS))
+
+GEM := $(BIN_DIR)/gem
+GEMDESK := $(BIN_DIR)/gemdesk
+GEMCLOCK := $(BIN_DIR)/gemclock
+GEMCALC := $(BIN_DIR)/gemcalc
+GEMVIEW := $(BIN_DIR)/gemview
+GEMIRC := $(BIN_DIR)/gemirc
+LIBVDI := $(LIB_DIR)/libvdi.a
+LIBGEMTRAP := $(LIB_DIR)/libgemtrap.a
+.PHONY: all install clean
+
+all: $(GEM) $(GEMDESK) $(GEMCLOCK) $(GEMCALC) $(GEMVIEW) $(GEMIRC)
+
+$(LIBVDI): $(VDI_OBJECTS) $(VDI_ASM_OBJECTS)
+	@mkdir -p $(dir $@)
+	rm -f $@
+	$(AR) $(ARFLAGS) $@ $^
+
+$(LIBGEMTRAP): $(TRAP_BINDING_OBJECTS) $(COMPAT_BINDING_OBJECTS)
+	@mkdir -p $(dir $@)
+	rm -f $@
+	$(AR) $(ARFLAGS) $@ $^
+
+$(OBJ_DIR)/%.o: src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/%.o: src/%.S
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(TRAP_OBJ_DIR)/bindings/original/%.o: src/bindings/original/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(BINDINGS_CPPFLAGS) -DGEM_TRAP_FAR_DATA=1 \
+		-DGEM_DIRECT=1 $(CFLAGS) -c $< -o $@
+
+$(TRAP_OBJ_DIR)/bindings/gem_compat_%.o: src/bindings/gem_compat_%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(BINDINGS_CPPFLAGS) -DGEM_TRAP_FAR_DATA=1 \
+		-DGEM_DIRECT=1 $(CFLAGS) -c $< -o $@
+
+$(TRAP_OBJ_DIR)/%.o: src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -DGEM_TRAP_FAR_DATA=1 -DGEM_DIRECT=1 \
+		$(CFLAGS) -c $< -o $@
+
+$(TRAP_OBJ_DIR)/%.o: src/%.S
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -DGEM_TRAP_FAR_DATA=1 -DGEM_DIRECT=1 \
+		$(CFLAGS) -c $< -o $@
+
+$(DESKTOP_OBJECTS) $(DESKTOP_ACC_OBJECTS): $(wildcard src/aes/opengem/*.h) \
+	$(wildcard src/include/*.h)
+
+$(GEM): $(RESIDENT_OBJECTS) $(LIBVDI)
+	@mkdir -p $(dir $@) $(MAP_DIR)
+	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
+		-msegment-relocation-stuff \
+		-maout-stack=4096 -maout-heap=1024 \
+		-Wl,--gc-sections -Wl,--icf=all \
+		-Wl,-Map,$(MAP_DIR)/gem.map -o $@ \
+		$(RESIDENT_OBJECTS) $(LIBVDI)
+
+$(GEMDESK): $(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) $(DESKTOP_ACC_OBJECTS) \
+		$(CLIENT_OBJECTS) $(LIBGEMTRAP)
+	@mkdir -p $(dir $@) $(MAP_DIR)
+	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
+		-msegment-relocation-stuff \
+		-maout-stack=4096 -maout-heap=16384 \
+		-Wl,--gc-sections -Wl,--icf=all \
+		-Wl,-Map,$(MAP_DIR)/gemdesk.map -o $@ \
+		$(CLIENT_OBJECTS) $(DESKTOP_OBJECTS) $(DESKTOP_SEAM_OBJECTS) \
+		$(DESKTOP_ACC_OBJECTS) $(LIBGEMTRAP)
+
+$(GEMCLOCK): $(TRAP_OBJ_DIR)/apps/gemclock.o $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+	@mkdir -p $(dir $@) $(MAP_DIR)
+	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
+		-msegment-relocation-stuff \
+		-maout-stack=2048 -maout-heap=1024 \
+		-Wl,--gc-sections -Wl,--icf=all \
+		-Wl,-Map,$(MAP_DIR)/gemclock.map -o $@ \
+		$(TRAP_OBJ_DIR)/apps/gemclock.o $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+
+$(GEMCALC): $(TRAP_OBJ_DIR)/apps/gemcalc.o $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+	@mkdir -p $(dir $@) $(MAP_DIR)
+	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
+		-msegment-relocation-stuff \
+		-maout-stack=2048 -maout-heap=1024 \
+		-Wl,--gc-sections -Wl,--icf=all \
+		-Wl,-Map,$(MAP_DIR)/gemcalc.map -o $@ \
+		$(TRAP_OBJ_DIR)/apps/gemcalc.o $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+
+$(GEMVIEW): $(GEMVIEW_OBJECTS) $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+	@mkdir -p $(dir $@) $(MAP_DIR)
+	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
+		-msegment-relocation-stuff \
+		-maout-stack=6144 -maout-heap=2048 \
+		-Wl,--gc-sections -Wl,--icf=all \
+		-Wl,-Map,$(MAP_DIR)/gemview.map -o $@ \
+		$(GEMVIEW_OBJECTS) $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+
+$(GEMIRC): $(IRC_OBJECTS) $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+	@mkdir -p $(dir $@) $(MAP_DIR)
+	$(CC) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
+		-msegment-relocation-stuff \
+		-maout-stack=4096 -maout-heap=1024 \
+		-Wl,--gc-sections -Wl,--icf=all \
+		-Wl,-Map,$(MAP_DIR)/gemirc.map -o $@ \
+		$(IRC_OBJECTS) $(CLIENT_TRANSPORT_OBJECT) \
+		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+
+install: all
+	install -d $(DESTDIR)/bin $(DESTDIR)/lib/gemsys
+	install -m 755 $(GEM) $(DESTDIR)/bin/gem
+	install -m 755 $(GEMDESK) $(DESTDIR)/bin/gemdesk
+	install -m 755 $(GEMCLOCK) $(DESTDIR)/bin/gemclock
+	install -m 755 $(GEMCALC) $(DESTDIR)/bin/gemcalc
+	install -m 755 $(GEMVIEW) $(DESTDIR)/bin/gemview
+	install -m 755 $(GEMIRC) $(DESTDIR)/bin/gemirc
+	install -m 644 assets/lib/gemsys/gem.rsc \
+		assets/lib/gemsys/desktop.rsc \
+		assets/lib/gemsys/desktop.inf \
+		assets/lib/gemsys/deskhi.icn \
+		assets/lib/gemsys/desklo.icn \
+		assets/lib/gemsys/sysfont.08 \
+		assets/lib/gemsys/sysfont.14 \
+		assets/lib/gemsys/sysfont.16 \
+		$(DESTDIR)/lib/gemsys/
+
+clean:
+	rm -rf $(BUILD_DIR)

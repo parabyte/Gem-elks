@@ -1,0 +1,29 @@
+Building and installing GEM for ELKS
+====================================
+
+You need a stock ELKS source tree,
+
+Build
+-----
+
+  make -f Makefile.elks ELKS_ROOT=/path/to/elks -j8 all
+
+Install
+-------
+
+  make -f Makefile.elks ELKS_ROOT=/path/to/elks \
+      DESTDIR=/path/to/elks-image-root install
+
+installs exactly:
+
+  /bin/gem
+  /bin/gemdesk
+  /etc/DESKTOP.INF
+  /GEMAPPS/GEMSYS/DESKTOP.RSC
+  /GEMAPPS/GEMSYS/DESKHI.ICN
+  /GEMAPPS/GEMSYS/DESKLO.ICN
+
+Start /bin/gem; it spawns /bin/gemdesk itself.  See
+docs/ELKS-INTEGRATION.txt for hooking GEM into ELKS disk images.
+
+make clean removes all generated files.
