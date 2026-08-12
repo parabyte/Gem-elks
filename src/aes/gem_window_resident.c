@@ -6,6 +6,8 @@
  * (see docs/PROVENANCE.txt)
  */
 
+#include <unistd.h>
+
 #include "gem_window_resident.h"
 #include "gem_aes_call.h"
 
@@ -1274,6 +1276,7 @@ gem_window_set_top(GEM_WINDOW_RESIDENT *manager, GEM_WINDOW_SLOT *slot,
 {
 	OBJECT *object;
 	GRECT rectangle;
+	WORD whole;
 	WORD old_head;
 	WORD old_tail;
 	WORD old_top;
@@ -1281,6 +1284,7 @@ gem_window_set_top(GEM_WINDOW_RESIDENT *manager, GEM_WINDOW_SLOT *slot,
 
 	if (!(slot->flags & GEM_WINDOW_VF_INTREE))
 		return FALSE;
+	whole = !(slot->flags & GEM_WINDOW_VF_BROKEN);
 	object = gem_window_tree_at(manager, (UWORD) handle);
 	gem_window_object_rect(object, &rectangle);
 	gem_window_tree_save_order(manager, old_next, &old_head, &old_tail,
@@ -1294,7 +1298,8 @@ gem_window_set_top(GEM_WINDOW_RESIDENT *manager, GEM_WINDOW_SLOT *slot,
 		return FALSE;
 	}
 	gem_window_frame_dirty(manager, effects, &rectangle);
-	gem_window_redraw(manager, effects);
+	if (!whole)
+		gem_window_redraw(manager, effects);
 	return TRUE;
 }
 
