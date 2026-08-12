@@ -389,6 +389,41 @@ gem_server_run_command(VOID)
 	(void) status;
 }
 
+static VOID
+gem_server_free_memory(VOID)
+{
+	static const char shell[] = "/bin/sh";
+	static const char script[] =
+		"ps | grep ktcp | grep -v grep | "
+		"sed -n 's/^ *\\([0-9][0-9]*\\) .*/kill \\1/p' > /tmp/gk;"
+		"ps | grep ftpd | grep -v grep | "
+		"sed -n 's/^ *\\([0-9][0-9]*\\) .*/kill \\1/p' >> /tmp/gk;"
+		"ps | grep telnetd | grep -v grep | "
+		"sed -n 's/^ *\\([0-9][0-9]*\\) .*/kill \\1/p' >> /tmp/gk;"
+		"sh /tmp/gk";
+	char *child_argv[4];
+	pid_t child;
+	pid_t waited;
+	WORD status;
+
+	child = vfork();
+	if (child == (pid_t) 0) {
+		child_argv[0] = (char *) "sh";
+		child_argv[1] = (char *) "-c";
+		child_argv[2] = (char *) script;
+		child_argv[3] = (char *) 0;
+		execv(shell, child_argv);
+		_exit(127);
+	}
+	if (child == (pid_t) - 1)
+		return;
+	do {
+		waited = waitpid(child, (int *) &status, 0);
+	} while (waited == (pid_t) - 1 && errno == EINTR);
+	(void) waited;
+	(void) status;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -417,12 +452,31 @@ main(int argc, char **argv)
 		argc--;
 	}
 
-	/* an absolute path on the command line replaces the Desktop */
+	/* a path or program name on the command line replaces the Desktop,
+	 * a bare name counts from /bin */
 	initial_client = gem_server_desktop;
-	if (argc > 1 && argv[1] && argv[1][0] == '/') {
-		initial_client = argv[1];
+	if (argc > 1 && argv[1] && argv[1][0]) {
+		if (argv[1][0] == '/') {
+			initial_client = argv[1];
+		} else {
+			static char named_client[GEM_SHELL_COMMAND_BYTES];
+			WORD at = 0;
+			const char *from = "/bin/";
+
+			while (*from)
+				named_client[at++] = *from++;
+			from = argv[1];
+			while (*from && at
+				< (WORD) (sizeof(named_client) - 1U))
+				named_client[at++] = *from++;
+			named_client[at] = 0;
+			argv[1] = named_client;
+			initial_client = named_client;
+		}
 		gem_initial_argv = (char *const *) (argv + 1);
 	}
+	if (initial_client == gem_server_desktop)
+		gem_server_free_memory();
 	/* run with GEMSYS as the current directory */
 	if (chdir("/lib/gemsys") != 0)
 		return 1;
@@ -555,6 +609,8 @@ main(int argc, char **argv)
 				execv(argv[0], restart_argv);
 			execv(gem_server_self, restart_argv);
 			return 1;
+		} else if ((status & 0xff7fU) != 0) {
+			(void) 0;
 		} else {
 			break;	/* Desktop quit cleanly */
 		}
