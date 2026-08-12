@@ -66,6 +66,7 @@ GEM_VDI_WORD gem_pc_screen_blit(GEM_VDI_COORD dst_x,
 #define GEM_VIDEO_EGA	1
 #define GEM_VIDEO_CGA	2
 #define GEM_VIDEO_HERCULES	3
+#define GEM_VIDEO_PEGA	4
 
 /* a planar scan line is 80 bytes, last visible byte in mode 12h is 38399 so clipped offsets never wrap 16 bits */
 #define GEM_PC_PLANAR_ROW_BYTES	80U

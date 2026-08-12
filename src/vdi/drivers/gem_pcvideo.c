@@ -31,7 +31,8 @@ static GEM_VDI_WORD
 gem_pc_is_planar(void)
 {
 	return gem_video_adapter == GEM_VIDEO_VGA
-		|| gem_video_adapter == GEM_VIDEO_EGA;
+		|| gem_video_adapter == GEM_VIDEO_EGA
+		|| gem_video_adapter == GEM_VIDEO_PEGA;
 }
 
 /* GEM_VIDEO=vga/ega/cga/herc overrides the BIOS probe */
@@ -51,6 +52,8 @@ gem_requested_adapter(void)
 		return GEM_VIDEO_CGA;
 	if (!strcmp(name, "herc") || !strcmp(name, "hercules"))
 		return GEM_VIDEO_HERCULES;
+	if (!strcmp(name, "pega"))
+		return GEM_VIDEO_PEGA;
 	return gem_bios_video_detect();
 }
 

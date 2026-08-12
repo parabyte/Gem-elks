@@ -647,6 +647,10 @@ gem_planar_open(GEM_VDI_SCREEN *screen, GEM_VDI_UWORD adapter)
 		gem_bios_video_set_mode(0x12);
 		screen->xres = 640;
 		screen->yres = 480;
+	} else if (adapter == GEM_VIDEO_PEGA) {
+		gem_bios_video_set_mode(0x0f);
+		screen->xres = 640;
+		screen->yres = 350;
 	} else {
 		gem_bios_video_set_mode(0x10);
 		screen->xres = 640;
