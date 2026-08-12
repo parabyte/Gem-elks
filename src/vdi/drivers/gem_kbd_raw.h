@@ -15,6 +15,8 @@
 /* forget any held modifiers, call when the keyboard is re-opened */
 void gem_kbd_raw_reset(void);
 
+GEM_VDI_UWORD gem_kbd_raw_modifiers(void);
+
 /*
  * feed one raw scancode. returns GEM_VDI_KEY_PRESS with character,
  * modifiers and scan_code filled when a key should go to GEM, or

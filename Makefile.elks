@@ -75,17 +75,15 @@ ARFLAGS := rcs
 VDI_SRCS := \
 	src/vdi/gem_vdi.c \
 	src/vdi/gem_input.c \
-	src/vdi/drivers/gem_kbd_ansi.c \
 	src/vdi/drivers/gem_kbd_raw.c \
 	src/vdi/drivers/gem_mouse_ms.c \
-	src/vdi/drivers/gem_mouse_ps2.c \
 	src/vdi/drivers/gem_mouse_amstrad.c \
 	src/vdi/drivers/gem_pcvideo.c \
 	src/vdi/drivers/gem_video_common.c \
 	src/vdi/drivers/gem_video_planar.c \
 	src/vdi/drivers/gem_video_mono.c \
 	src/vdi/drivers/gem_video_cga.c \
-	src/vdi/drivers/gem_video_hercules.c
+	src/vdi/drivers/gem_video_hercules.c \
 
 VDI_ASM_SRCS := src/vdi/drivers/gem_pcvideo_asm.S
 

@@ -4,9 +4,9 @@
  * tty gives bytes, GEM gets IBM PC scan codes and 16-bit screen coords back
  * keyboard is /dev/tty1 or /dev/console (CONSOLE overrides), ANSI cursor keys
  * turn into BIOS scan codes, mouse is a 1200-baud ms serial mouse on
- * /dev/ttyS0, MOUSE_PORT and MOUSE_PROTOCOL (ms/ps2/amstrad) override
- * this is just the core, the hardware knowhow lives in drivers/ (gem_kbd_ansi,
- * gem_mouse_ms/ps2/amstrad, the amstrad port is counter ports, no fd)
+ * /dev/ttyS0, MOUSE_PORT and MOUSE_PROTOCOL (ms/amstrad) override
+ * this is just the core, the hardware knowhow lives in drivers/ (gem_kbd_raw,
+ * gem_mouse_ms/amstrad, the amstrad port is counter ports, no fd)
  */
 
 #include <errno.h>
@@ -17,11 +17,10 @@
 #include <unistd.h>
 
 #include "vdi.h"
-#include "drivers/gem_kbd_ansi.h"
+#include "gem_vdi_sound.h"
 #include "drivers/gem_kbd_raw.h"
 #include "drivers/gem_mouse_amstrad.h"
 #include "drivers/gem_mouse_ms.h"
-#include "drivers/gem_mouse_ps2.h"
 
 /* set by the video driver once it holds the console graphics lock and
  * turns on DCSET_KRAW, then the keyboard fd gives raw set-1 scancodes
@@ -41,7 +40,6 @@ extern GEM_VDI_WORD gem_console_kraw;
 #define GEM_KEY_STATE_SS3	3
 
 #define GEM_MOUSE_PROTOCOL_MS	0
-#define GEM_MOUSE_PROTOCOL_PS2	1
 #define GEM_MOUSE_PROTOCOL_AMSTRAD	2
 
 /*
@@ -93,7 +91,91 @@ static GEM_VDI_COORD gem_mouse_x;
 static GEM_VDI_COORD gem_mouse_y;
 static GEM_VDI_WORD gem_mouse_buttons;
 
-static void
+#define GEM_KBD_MOUSE_FAST_X	8
+#define GEM_KBD_MOUSE_FAST_Y	14
+static GEM_VDI_WORD gem_kbd_mouse_on;
+static GEM_VDI_WORD gem_kbd_mouse_armed;
+static GEM_VDI_WORD gem_kbd_mouse_seen_motion;
+static GEM_VDI_COORD gem_kbd_mouse_dx;
+static GEM_VDI_COORD gem_kbd_mouse_dy;
+static GEM_VDI_WORD gem_kbd_mouse_buttons;
+static GEM_VDI_WORD gem_kbd_mouse_release;
+static GEM_VDI_WORD gem_kbd_mouse_event;
+static GEM_VDI_WORD gem_kbd_mouse_last_combo;
+
+#define GEM_INPUT_COLD \
+	__far __attribute__((far_section, noinline, \
+		section(".fartext.geminput")))
+
+static void GEM_INPUT_COLD
+gem_kbd_mouse_combo(GEM_VDI_WORD key_pressed)
+{
+	GEM_VDI_WORD combo;
+
+	combo = (gem_kbd_raw_modifiers()
+		& (GEM_VDI_MOD_CTRL | GEM_VDI_MOD_RSHIFT))
+		== (GEM_VDI_MOD_CTRL | GEM_VDI_MOD_RSHIFT);
+	if (combo == gem_kbd_mouse_last_combo)
+		return;
+	gem_kbd_mouse_last_combo = combo;
+	if (combo) {
+		if (!key_pressed)
+			gem_kbd_mouse_armed = 1;
+		return;
+	}
+	if (!gem_kbd_mouse_armed)
+		return;
+	gem_kbd_mouse_armed = 0;
+	gem_kbd_mouse_on = !gem_kbd_mouse_on;
+	if (!gem_kbd_mouse_on && gem_kbd_mouse_buttons) {
+		gem_kbd_mouse_buttons = 0;
+		gem_kbd_mouse_release = 0;
+		gem_kbd_mouse_event = 1;
+	}
+	(void) gem_vdi_sound_play(2000, 110);
+}
+
+static const GEM_VDI_UBYTE gem_kbd_mouse_table[6][4] = {
+	{0x48, 0, 1, 0},
+	{0x50, 0, 2, 0},
+	{0x4b, 1, 0, 0},
+	{0x4d, 2, 0, 0},
+	{0x47, 0, 0, 1},
+	{0x4f, 0, 0, 2}	
+};
+
+static GEM_VDI_WORD GEM_INPUT_COLD
+gem_kbd_mouse_key(GEM_VDI_UWORD scan, GEM_VDI_UWORD mods)
+{
+	const GEM_VDI_UBYTE *entry;
+	GEM_VDI_WORD shifted;
+	GEM_VDI_UBYTE at;
+
+	for (at = 0;; at++) {
+		if (at >= 6)
+			return 0;
+		if (gem_kbd_mouse_table[at][0] == (GEM_VDI_UBYTE) scan)
+			break;
+	}
+	entry = gem_kbd_mouse_table[at];
+	shifted = (mods & (GEM_VDI_MOD_LSHIFT | GEM_VDI_MOD_RSHIFT)) != 0;
+	if (entry[1])
+		gem_kbd_mouse_dx = (GEM_VDI_COORD) (gem_kbd_mouse_dx
+			+ ((entry[1] == 1) ? -1 : 1)
+			* (shifted ? 1 : GEM_KBD_MOUSE_FAST_X));
+	if (entry[2])
+		gem_kbd_mouse_dy = (GEM_VDI_COORD) (gem_kbd_mouse_dy
+			+ ((entry[2] == 1) ? -1 : 1)
+			* (shifted ? 1 : GEM_KBD_MOUSE_FAST_Y));
+	if (entry[3]) {
+		gem_kbd_mouse_buttons = 1;
+		gem_kbd_mouse_release = (entry[3] == 1);
+	}
+	gem_kbd_mouse_event = 1;
+	return 1;
+}
+
+static void GEM_INPUT_COLD
 gem_termios_make_keyboard_raw(GEM_TERMIOS_ABI *settings)
 {
 	/* ELKS keeps all these flags below bit 16, only the low words change */
@@ -107,10 +189,10 @@ gem_termios_make_keyboard_raw(GEM_TERMIOS_ABI *settings)
 	settings->control[VTIME] = 0;
 }
 
-static void
+static void GEM_INPUT_COLD
 gem_termios_make_mouse_raw(GEM_TERMIOS_ABI *settings, GEM_VDI_UBYTE protocol)
 {
-	/* ms packets carry seven bits, PS/2 packets use all eight */
+	/* ms packets carry seven bits */
 	settings->lflag_low &= (GEM_VDI_UWORD) ~(ECHO | ECHONL | ICANON
 		| IEXTEN | ISIG);
 	settings->iflag_low &= (GEM_VDI_UWORD) ~(ICRNL | INPCK | ISTRIP
@@ -118,15 +200,12 @@ gem_termios_make_mouse_raw(GEM_TERMIOS_ABI *settings, GEM_VDI_UBYTE protocol)
 	settings->oflag_low &= (GEM_VDI_UWORD) ~OPOST;
 	settings->cflag_low &= (GEM_VDI_UWORD) ~(CBAUD | CSIZE | PARENB);
 	settings->cflag_low |= (GEM_VDI_UWORD) (B1200 | CREAD | CLOCAL);
-	if (protocol == GEM_MOUSE_PROTOCOL_PS2)
-		settings->cflag_low |= CS8;
-	else
-		settings->cflag_low |= CS7;
+	settings->cflag_low |= CS7;
 	settings->control[VMIN] = 0;
 	settings->control[VTIME] = 0;
 }
 
-static GEM_VDI_WORD
+static GEM_VDI_WORD GEM_INPUT_COLD
 gem_open_keyboard_path(const char *path)
 {
 	GEM_VDI_WORD descriptor;
@@ -151,7 +230,7 @@ gem_open_keyboard_path(const char *path)
 	return descriptor;
 }
 
-static void
+static void GEM_INPUT_COLD
 gem_open_keyboard(void)
 {
 	const char *path;
@@ -167,7 +246,7 @@ gem_open_keyboard(void)
 		gem_keyboard_fd = gem_open_keyboard_path(GEM_KEYBOARD_FALLBACK);
 }
 
-static void
+static void GEM_INPUT_COLD
 gem_open_mouse(void)
 {
 	const char *path;
@@ -177,14 +256,12 @@ gem_open_mouse(void)
 	gem_mouse_termios_valid = 0;
 	gem_mouse_fd = -1;
 	gem_mouse_active = 0;
-	/* default is the PC1640 mouse, MOUSE_PROTOCOL=ms/ps2 picks another */
+	/* default is the PC1640 mouse, MOUSE_PROTOCOL=ms picks the serial one */
 	protocol = getenv("MOUSE_PROTOCOL");
 	if (!protocol || !strcmp(protocol, "amstrad"))
 		gem_mouse_protocol = GEM_MOUSE_PROTOCOL_AMSTRAD;
 	else if (!strcmp(protocol, "ms"))
 		gem_mouse_protocol = GEM_MOUSE_PROTOCOL_MS;
-	else if (!strcmp(protocol, "ps2"))
-		gem_mouse_protocol = GEM_MOUSE_PROTOCOL_PS2;
 	else
 		return;
 
@@ -206,10 +283,7 @@ gem_open_mouse(void)
 	if (gem_mouse_fd < 0)
 		return;
 	gem_mouse_active = 1;
-	if (gem_mouse_protocol == GEM_MOUSE_PROTOCOL_PS2)
-		gem_mouse_ps2_reset();
-	else
-		gem_mouse_ms_reset();
+	gem_mouse_ms_reset();
 
 	/* some packet devices dont do termios, theyre already raw, a failed
 	 * tcgetattr dont mean the open failed */
@@ -258,7 +332,8 @@ gem_return_ascii(GEM_VDI_UBYTE byte, GEM_VDI_UWORD extra_modifiers,
 	GEM_VDI_UWORD *character, GEM_VDI_UWORD *modifiers,
 	GEM_VDI_UWORD *scan_code)
 {
-	/* ELKS terminals may send LF or CR for Enter, DEL for Backspace */
+	/* kraw-less kernels are a bare ascii fallback now, ELKS terminals
+	 * may send LF or CR for Enter, DEL for Backspace */
 	if (byte == 10)
 		byte = 13;
 	else if (byte == 127)
@@ -266,21 +341,9 @@ gem_return_ascii(GEM_VDI_UBYTE byte, GEM_VDI_UWORD extra_modifiers,
 	if (character)
 		*character = byte;
 	if (modifiers)
-		*modifiers = gem_kbd_ansi_modifiers(byte) | extra_modifiers;
+		*modifiers = extra_modifiers;
 	if (scan_code)
-		*scan_code = gem_kbd_ansi_scan(byte);
-}
-
-static void
-gem_return_extended(GEM_VDI_UWORD scan, GEM_VDI_UWORD *character,
-	GEM_VDI_UWORD *modifiers, GEM_VDI_UWORD *scan_code)
-{
-	if (character)
-		*character = 0;
-	if (modifiers)
-		*modifiers = 0;
-	if (scan_code)
-		*scan_code = scan;
+		*scan_code = 0;
 }
 
 static GEM_VDI_WORD
@@ -311,11 +374,9 @@ gem_mouse_get_byte(GEM_VDI_UBYTE *byte)
 static GEM_VDI_COORD
 gem_accelerate_delta(GEM_VDI_COORD delta)
 {
-	/* above five only the excess doubles, 6 becomes 7, 20 becomes 35 */
-	if (delta > 5)
-		delta += delta - 5;
-	else if (delta < -5)
-		delta += delta + 5;
+	/* the pc gem driver doubles the whole delta past five */
+	if (delta > 5 || delta < -5)
+		delta += delta;
 	return delta;
 }
 
@@ -331,6 +392,15 @@ gem_vdi_open_input(GEM_VDI_SCREEN *screen)
 	gem_keyboard_parameter = 0;
 	gem_keyboard_idle_poll = 0;
 	gem_kbd_raw_reset();
+	gem_kbd_mouse_on = 1;
+	gem_kbd_mouse_armed = 0;
+	gem_kbd_mouse_seen_motion = 0;
+	gem_kbd_mouse_last_combo = 0;
+	gem_kbd_mouse_dx = 0;
+	gem_kbd_mouse_dy = 0;
+	gem_kbd_mouse_buttons = 0;
+	gem_kbd_mouse_release = 0;
+	gem_kbd_mouse_event = 0;
 	gem_mouse_next = 0;
 	gem_mouse_count = 0;
 	gem_mouse_buttons = 0;
@@ -408,10 +478,26 @@ gem_vdi_read_keyboard(GEM_VDI_UWORD *character, GEM_VDI_UWORD *modifiers,
 		 * decode it ourselves. with no raw mode the tty gives ascii
 		 * so hand the byte back as-is */
 		if (gem_console_kraw) {
-			if (gem_kbd_raw_scancode(byte, character, modifiers,
-					scan_code) == GEM_VDI_KEY_PRESS)
-				return GEM_VDI_KEY_PRESS;
-			continue;
+			GEM_VDI_UWORD raw_char;
+			GEM_VDI_UWORD raw_mods;
+			GEM_VDI_UWORD raw_scan;
+			GEM_VDI_WORD pressed;
+
+			pressed = gem_kbd_raw_scancode(byte, &raw_char,
+				&raw_mods, &raw_scan) == GEM_VDI_KEY_PRESS;
+			gem_kbd_mouse_combo(pressed);
+			if (!pressed)
+				continue;
+			if (gem_kbd_mouse_on
+				&& gem_kbd_mouse_key(raw_scan, raw_mods))
+				continue;
+			if (character)
+				*character = raw_char;
+			if (modifiers)
+				*modifiers = raw_mods;
+			if (scan_code)
+				*scan_code = raw_scan;
+			return GEM_VDI_KEY_PRESS;
 		}
 		gem_return_ascii(byte, 0, character, modifiers, scan_code);
 		return GEM_VDI_KEY_PRESS;
@@ -425,15 +511,13 @@ gem_vdi_read_keyboard(GEM_VDI_UWORD *character, GEM_VDI_UWORD *modifiers,
  * returns nonzero when an event went out
  */
 static GEM_VDI_WORD
-gem_mouse_apply(GEM_VDI_COORD delta_x, GEM_VDI_COORD delta_y,
+gem_mouse_publish(GEM_VDI_COORD delta_x, GEM_VDI_COORD delta_y,
 	GEM_VDI_WORD new_buttons, GEM_VDI_COORD *x, GEM_VDI_COORD *y,
 	GEM_VDI_WORD *buttons)
 {
 	GEM_VDI_COORD new_x;
 	GEM_VDI_COORD new_y;
 
-	delta_x = gem_accelerate_delta(delta_x);
-	delta_y = gem_accelerate_delta(delta_y);
 	new_x = gem_mouse_x + delta_x;
 	new_y = gem_mouse_y + delta_y;
 	if (new_x < 0)
@@ -464,6 +548,21 @@ gem_mouse_apply(GEM_VDI_COORD delta_x, GEM_VDI_COORD delta_y,
 	return 1;
 }
 
+static GEM_VDI_WORD
+gem_mouse_apply(GEM_VDI_COORD delta_x, GEM_VDI_COORD delta_y,
+	GEM_VDI_WORD new_buttons, GEM_VDI_COORD *x, GEM_VDI_COORD *y,
+	GEM_VDI_WORD *buttons)
+{
+	if ((delta_x || delta_y) && !gem_kbd_mouse_seen_motion) {
+		gem_kbd_mouse_seen_motion = 1;
+		gem_kbd_mouse_on = 0;
+	}
+	return gem_mouse_publish(gem_accelerate_delta(delta_x),
+		gem_accelerate_delta(delta_y),
+		(GEM_VDI_WORD) (new_buttons | gem_kbd_mouse_buttons),
+		x, y, buttons);
+}
+
 GEM_VDI_WORD
 gem_vdi_read_mouse(GEM_VDI_COORD *x, GEM_VDI_COORD *y, GEM_VDI_WORD *buttons)
 {
@@ -481,7 +580,29 @@ gem_vdi_read_mouse(GEM_VDI_COORD *x, GEM_VDI_COORD *y, GEM_VDI_WORD *buttons)
 		*y = gem_mouse_y;
 	if (buttons)
 		*buttons = gem_mouse_buttons;
-	if (!gem_mouse_active || !gem_input_screen)
+	if (!gem_input_screen)
+		return 0;
+
+	if (gem_kbd_mouse_event) {
+		GEM_VDI_COORD kbd_dx = gem_kbd_mouse_dx;
+		GEM_VDI_COORD kbd_dy = gem_kbd_mouse_dy;
+		GEM_VDI_WORD published;
+
+		gem_kbd_mouse_dx = 0;
+		gem_kbd_mouse_dy = 0;
+		gem_kbd_mouse_event = 0;
+		published = gem_mouse_publish(kbd_dx, kbd_dy,
+			gem_kbd_mouse_buttons, x, y, buttons);
+		if (gem_kbd_mouse_buttons && gem_kbd_mouse_release) {
+			gem_kbd_mouse_buttons = 0;
+			gem_kbd_mouse_release = 0;
+			gem_kbd_mouse_event = 1;
+		}
+		if (published)
+			return 1;
+	}
+
+	if (!gem_mouse_active)
 		return 0;
 
 	if (gem_mouse_protocol == GEM_MOUSE_PROTOCOL_AMSTRAD) {
@@ -499,12 +620,8 @@ gem_vdi_read_mouse(GEM_VDI_COORD *x, GEM_VDI_COORD *y, GEM_VDI_WORD *buttons)
 			return -1;
 		if (!status)
 			return 0;
-		if (gem_mouse_protocol == GEM_MOUSE_PROTOCOL_PS2)
-			complete = gem_mouse_ps2_parse(byte, &delta_x,
-				&delta_y, &new_buttons);
-		else
-			complete = gem_mouse_ms_parse(byte, &delta_x,
-				&delta_y, &new_buttons);
+		complete = gem_mouse_ms_parse(byte, &delta_x,
+			&delta_y, &new_buttons);
 		if (!complete)
 			continue;
 		if (gem_mouse_apply(delta_x, delta_y, new_buttons,

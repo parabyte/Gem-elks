@@ -70,6 +70,12 @@ gem_kbd_mods(void)
 	return mods;
 }
 
+GEM_VDI_UWORD
+gem_kbd_raw_modifiers(void)
+{
+	return gem_kbd_mods();
+}
+
 GEM_VDI_WORD
 gem_kbd_raw_scancode(GEM_VDI_UBYTE code, GEM_VDI_UWORD *character,
 	GEM_VDI_UWORD *modifiers, GEM_VDI_UWORD *scan_code)
