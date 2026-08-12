@@ -694,17 +694,15 @@ gem_resource_relocate_tedinfo(GEM_RESOURCE_RESIDENT *resident,
 			gem_resource_pointer(resident->storage.base.hi, offset);
 		if (gem_resource_relocate_pair(resident,
 				offset + GEM_TED_PTEXT_OFFSET, &address)) {
-			if (!gem_resource_string_length(resident, address.lo,
+			if (gem_resource_string_length(resident, address.lo,
 					&length))
-				return FALSE;
-			tedinfo->te_txtlen = (WORD) (length + 1U);
+				tedinfo->te_txtlen = (WORD) (length + 1U);
 		}
 		if (gem_resource_relocate_pair(resident,
 				offset + GEM_TED_PTMPLT_OFFSET, &address)) {
-			if (!gem_resource_string_length(resident, address.lo,
+			if (gem_resource_string_length(resident, address.lo,
 					&length))
-				return FALSE;
-			tedinfo->te_tmplen = (WORD) (length + 1U);
+				tedinfo->te_tmplen = (WORD) (length + 1U);
 		}
 		(void) gem_resource_relocate_pair(resident,
 			offset + GEM_TED_PVALID_OFFSET, NULL);
@@ -883,15 +881,16 @@ gem_resource_relocate_objects(GEM_RESOURCE_RESIDENT *resident,
 static WORD
 gem_resource_relocate(GEM_RESOURCE_RESIDENT *resident, const RSHDR *header)
 {
-	return gem_resource_relocate_trees(resident, header)
-		&& gem_resource_relocate_tedinfo(resident, header)
-		&& gem_resource_relocate_iconblks(resident, header)
-		&& gem_resource_relocate_bitblks(resident, header)
-		&& gem_resource_relocate_table(resident, header->rsh_frstr,
-		header->rsh_nstring)
-		&& gem_resource_relocate_table(resident, header->rsh_frimg,
-		header->rsh_nimages)
-		&& gem_resource_relocate_objects(resident, header);
+	(void) gem_resource_relocate_table(resident, header->rsh_frstr,
+		header->rsh_nstring);
+	(void) gem_resource_relocate_table(resident, header->rsh_frimg,
+		header->rsh_nimages);
+	(void) gem_resource_relocate_trees(resident, header);
+	(void) gem_resource_relocate_tedinfo(resident, header);
+	(void) gem_resource_relocate_iconblks(resident, header);
+	(void) gem_resource_relocate_bitblks(resident, header);
+	(void) gem_resource_relocate_objects(resident, header);
+	return TRUE;
 }
 
 /* look up an address in the resource */
