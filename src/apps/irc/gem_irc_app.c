@@ -2,115 +2,47 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
-/*
- * gem_irc_app.c - window-independent IRC application controller
- *
- * turns protocol callbacks into fixed scrollback buffers, edits one
- * command line, handles the slash commands, polls a complete-line
- * transport, buffer zero is the permanent server/channel buffer and
- * carries the roster, a PM to the local nick opens one PRIVATE buffer
- * keyed by the sender
- */
+/* fixed IRC state, scrollback and commands */
 
 #include "gem_irc_app.h"
+#include "gem_irc_transport.h"
 
-/*
- * step a pointer to the next array element, on ELKS an inline add so gcc
- * dont turn it into a MUL, plain C off the target
- */
-#if defined(ELKS) && ELKS
-#define GEM_IRC_APP_NEXT_LINE(line) \
-	__asm__ volatile ("addw %1,%0" : "+r" (line) \
-			  : "i" (sizeof(GEM_IRC_APP_LINE)) : "cc")
-#else
-#define GEM_IRC_APP_NEXT_LINE(line) ((line)++)
-#endif
+#include <string.h>
 
-#if defined(ELKS) && ELKS
-#define GEM_IRC_APP_NEXT_NICK(nick) \
-	__asm__ volatile ("addw %1,%0" : "+r" (nick) \
-			  : "i" (sizeof(GEM_IRC_APP_NICK)) : "cc")
-#else
-#define GEM_IRC_APP_NEXT_NICK(nick) ((nick)++)
-#endif
-
-#if defined(ELKS) && ELKS
-#define GEM_IRC_APP_NEXT_BUFFER(buffer) \
-	__asm__ volatile ("addw %1,%0" : "+r" (buffer) \
-			  : "i" (sizeof(GEM_IRC_APP_BUFFER)) : "cc")
-#else
-#define GEM_IRC_APP_NEXT_BUFFER(buffer) ((buffer)++)
-#endif
-
-static GEM_IRC_APP_BUFFER *
+static __inline__ GEM_IRC_APP_BUFFER * __attribute__((always_inline))
 gem_irc_app_buffer_ptr(GEM_IRC_APP *app, GEM_IRC_UWORD index)
 {
-	GEM_IRC_APP_BUFFER *buffer;
-
-	buffer = app->buffers;
-	while (index) {
-		GEM_IRC_APP_NEXT_BUFFER(buffer);
-		index--;
-	}
-	return buffer;
+	return app->order[index];
 }
 
-static const GEM_IRC_APP_BUFFER *
+static __inline__ const GEM_IRC_APP_BUFFER * __attribute__((always_inline))
 gem_irc_app_const_buffer_ptr(const GEM_IRC_APP *app, GEM_IRC_UWORD index)
 {
-	const GEM_IRC_APP_BUFFER *buffer;
-
-	buffer = app->buffers;
-	while (index) {
-		GEM_IRC_APP_NEXT_BUFFER(buffer);
-		index--;
-	}
-	return buffer;
+	return app->order[index];
 }
 
-static GEM_IRC_APP_BUFFER *
+static __inline__ GEM_IRC_APP_BUFFER * __attribute__((always_inline))
 gem_irc_app_active_buffer(GEM_IRC_APP *app)
 {
 	return gem_irc_app_buffer_ptr(app, (GEM_IRC_UWORD) app->active);
 }
 
-static GEM_IRC_APP_LINE *
+static __inline__ GEM_IRC_APP_LINE * __attribute__((always_inline))
 gem_irc_app_line_at(GEM_IRC_APP_BUFFER *buffer, GEM_IRC_UWORD index)
 {
-	GEM_IRC_APP_LINE *line;
-
-	line = buffer->lines;
-	while (index) {
-		GEM_IRC_APP_NEXT_LINE(line);
-		index--;
-	}
-	return line;
+	return &buffer->lines[index];
 }
 
-static const GEM_IRC_APP_LINE *
+static __inline__ const GEM_IRC_APP_LINE * __attribute__((always_inline))
 gem_irc_app_const_line_at(const GEM_IRC_APP_BUFFER *buffer, GEM_IRC_UWORD index)
 {
-	const GEM_IRC_APP_LINE *line;
-
-	line = buffer->lines;
-	while (index) {
-		GEM_IRC_APP_NEXT_LINE(line);
-		index--;
-	}
-	return line;
+	return &buffer->lines[index];
 }
 
-static GEM_IRC_APP_NICK *
+static __inline__ GEM_IRC_APP_NICK * __attribute__((always_inline))
 gem_irc_app_nick_at(GEM_IRC_APP *app, GEM_IRC_UWORD index)
 {
-	GEM_IRC_APP_NICK *nick;
-
-	nick = app->nicks;
-	while (index) {
-		GEM_IRC_APP_NEXT_NICK(nick);
-		index--;
-	}
-	return nick;
+	return &app->nicks[index];
 }
 
 /* copy every byte, or refuse without touching the destination */
@@ -172,34 +104,121 @@ gem_irc_app_roster_find(const GEM_IRC_APP *app, const char *name)
 	while (index < (GEM_IRC_UWORD) app->nick_count) {
 		if (gem_irc_equal(nick->text, name))
 			return (GEM_IRC_WORD) index;
-		GEM_IRC_APP_NEXT_NICK(nick);
+		nick++;
 		index++;
 	}
 	return -1;
 }
 
+static GEM_IRC_UBYTE
+gem_irc_app_prefix_rank(char prefix)
+{
+	if (prefix == '~')
+		return 0;
+	if (prefix == '&')
+		return 1;
+	if (prefix == '@')
+		return 2;
+	if (prefix == '%')
+		return 3;
+	if (prefix == '+')
+		return 4;
+	return 5;
+}
+
+static char
+gem_irc_app_fold(char value)
+{
+	if (value >= 'A' && value <= 'Z')
+		return (char) (value + ('a' - 'A'));
+	if (value == '[')
+		return '{';
+	if (value == '\\')
+		return '|';
+	if (value == ']')
+		return '}';
+	if (value == '^')
+		return '~';
+	return value;
+}
+
+static GEM_IRC_WORD
+gem_irc_app_nick_before(char prefix, const char *name,
+	const GEM_IRC_APP_NICK *nick)
+{
+	GEM_IRC_UBYTE left;
+	GEM_IRC_UBYTE right;
+	const char *other;
+	char a;
+	char b;
+
+	left = gem_irc_app_prefix_rank(prefix);
+	right = gem_irc_app_prefix_rank(nick->prefix);
+	if (left != right)
+		return left < right;
+	other = nick->text;
+	while (*name && *other) {
+		a = gem_irc_app_fold(*name++);
+		b = gem_irc_app_fold(*other++);
+		if (a != b)
+			return a < b;
+	}
+	return *name == '\0' && *other != '\0';
+}
+
 static void
-gem_irc_app_roster_add(GEM_IRC_APP *app, const char *name)
+gem_irc_app_roster_add(GEM_IRC_APP *app, const char *name, char prefix)
 {
 	GEM_IRC_APP_NICK *nick;
+	GEM_IRC_WORD found;
+	GEM_IRC_UWORD index;
+	GEM_IRC_UWORD slot;
 
 	if (!name)
 		return;
-	if (!*name || gem_irc_app_roster_find(app, name) >= 0)
+	if (!*name)
 		return;
+	index = 0;
+	while (name[index]) {
+		if (index + 1U >= GEM_IRC_NICK_SIZE) {
+			app->nick_overflow = 1;
+			return;
+		}
+		index++;
+	}
+	found = gem_irc_app_roster_find(app, name);
+	if (found >= 0) {
+		nick = gem_irc_app_nick_at(app, (GEM_IRC_UWORD) found);
+		if (prefix && nick->prefix != prefix) {
+			nick->prefix = prefix;
+			app->dirty |= GEM_IRC_APP_DIRTY_ROSTER;
+		}
+		return;
+	}
 	if (app->nick_count >= GEM_IRC_APP_NICK_SLOTS) {
 		app->nick_overflow = 1;
 		app->dirty |= GEM_IRC_APP_DIRTY_ROSTER;
 		return;
 	}
-	nick = gem_irc_app_nick_at(app, (GEM_IRC_UWORD) app->nick_count);
+	index = 0;
+	nick = app->nicks;
+	while (index < (GEM_IRC_UWORD) app->nick_count
+		&& !gem_irc_app_nick_before(prefix, name, nick)) {
+		index++;
+		nick++;
+	}
+	slot = (GEM_IRC_UWORD) app->nick_count;
+	if (slot > index)
+		memmove(nick + 1, nick, (slot - index) * sizeof(*nick));
 	if (gem_irc_app_copy_exact(nick->text, GEM_IRC_NICK_SIZE, name)
 		!= GEM_IRC_OK) {
 		app->nick_overflow = 1;
 		app->dirty |= GEM_IRC_APP_DIRTY_ROSTER;
 		return;
 	}
-	app->nick_count++;
+	nick->prefix = prefix;
+	app->nick_count = (GEM_IRC_UBYTE)
+		((GEM_IRC_UWORD) app->nick_count + 1U);
 	app->dirty |= GEM_IRC_APP_DIRTY_ROSTER;
 }
 
@@ -207,23 +226,22 @@ static void
 gem_irc_app_roster_remove(GEM_IRC_APP *app, const char *name)
 {
 	GEM_IRC_WORD found;
-	GEM_IRC_UWORD last;
+	GEM_IRC_UWORD slot;
 	GEM_IRC_APP_NICK *destination;
-	GEM_IRC_APP_NICK *source;
 
 	if (!name)
 		return;
 	found = gem_irc_app_roster_find(app, name);
 	if (found < 0)
 		return;
+	slot = (GEM_IRC_UWORD) found;
+	destination = gem_irc_app_nick_at(app, slot);
+	memmove(destination, destination + 1,
+		(app->nick_count - slot - 1U) * sizeof(*destination));
 	app->nick_count--;
-	last = (GEM_IRC_UWORD) app->nick_count;
-	if ((GEM_IRC_UWORD) found != last) {
-		destination = gem_irc_app_nick_at(app, (GEM_IRC_UWORD) found);
-		source = gem_irc_app_nick_at(app, last);
-		(void) gem_irc_app_copy_exact(destination->text,
-			GEM_IRC_NICK_SIZE, source->text);
-	}
+	destination = gem_irc_app_nick_at(app, (GEM_IRC_UWORD) app->nick_count);
+	destination->prefix = '\0';
+	destination->text[0] = '\0';
 	app->dirty |= GEM_IRC_APP_DIRTY_ROSTER;
 }
 
@@ -232,36 +250,41 @@ gem_irc_app_roster_rename(GEM_IRC_APP *app, const char *old_name,
 	const char *new_name)
 {
 	GEM_IRC_WORD found;
+	char prefix;
 
 	found = gem_irc_app_roster_find(app, old_name);
 	if (found < 0)
 		return;
+	prefix = gem_irc_app_nick_at(app, (GEM_IRC_UWORD) found)->prefix;
 	gem_irc_app_roster_remove(app, old_name);
-	gem_irc_app_roster_add(app, new_name);
+	gem_irc_app_roster_add(app, new_name, prefix);
 }
 
 static char *gem_irc_app_word(char **remaining);
 
-/* split the names list in place, its scratch memory so overwriting it is fine */
+/* split the scratch NAMES list in place */
 static void
 gem_irc_app_roster_names(GEM_IRC_APP *app, const char *text)
 {
 	char *remaining;
 	char *name;
+	char prefix;
 
 	remaining = (char *) text;
 	while ((name = gem_irc_app_word(&remaining)) != (char *) 0) {
+		prefix = '\0';
 		while (*name == '~' || *name == '&' || *name == '@'
-			|| *name == '%' || *name == '+')
+			|| *name == '%' || *name == '+') {
+			if (!prefix || gem_irc_app_prefix_rank(*name)
+				< gem_irc_app_prefix_rank(prefix))
+				prefix = *name;
 			name++;
-		gem_irc_app_roster_add(app, name);
+		}
+		gem_irc_app_roster_add(app, name, prefix);
 	}
 }
 
-/*
- * append one row, a row in the drawn buffer dirties the transcript,
- * anywhere else it sets the unread marker and dirties the tab bar
- */
+/* append one row and mark its buffer dirty */
 static void
 gem_irc_app_append(GEM_IRC_APP *app, GEM_IRC_APP_BUFFER *buffer,
 	GEM_IRC_UBYTE kind, const char *text)
@@ -285,42 +308,90 @@ gem_irc_app_append(GEM_IRC_APP *app, GEM_IRC_APP_BUFFER *buffer,
 	line = gem_irc_app_line_at(buffer, slot);
 	line->kind = kind;
 	gem_irc_app_copy_clipped(line->text, GEM_IRC_APP_DISPLAY_SIZE, text);
+	buffer->appended++;
 
-	/* a scrolled-back view stays still as new text lands */
+	/* keep a scrolled view still */
 	if (buffer->scroll_offset
 		&& buffer->scroll_offset + 1U < GEM_IRC_APP_SCROLL_LINES)
 		buffer->scroll_offset++;
 
 	if (buffer == gem_irc_app_active_buffer(app))
 		app->dirty |= GEM_IRC_APP_DIRTY_TRANSCRIPT;
-	else {
+	else if (!buffer->activity) {
 		buffer->activity = 1;
 		app->dirty |= GEM_IRC_APP_DIRTY_TABS;
 	}
 }
 
-/*
- * feed one piece of a logical line into the shared scratch row, a full
- * row is committed before the next byte is copied, so no byte of a
- * message is dropped
- */
+/* decimal digit in a colour code */
+static GEM_IRC_WORD
+gem_irc_app_digit(char value)
+{
+	return value >= '0' && value <= '9';
+}
+
+/* wrap at a late space, or at the row limit */
+static void
+gem_irc_app_wrap_row(GEM_IRC_APP *app, GEM_IRC_APP_BUFFER *buffer,
+	GEM_IRC_UBYTE kind, GEM_IRC_UWORD *length)
+{
+	char *row;
+	char *space;
+	GEM_IRC_UWORD carry;
+	GEM_IRC_UWORD indent;
+
+	row = app->format_line;
+	/* narrow rows wrap flush left */
+	indent = *length > 8U ? 2U : 0U;
+	row[*length] = '\0';
+	space = strrchr(row + (*length >> 1), ' ');
+	if (!space)
+		carry = 0;
+	else {
+		*space = '\0';
+		carry = (GEM_IRC_UWORD) (row + *length - space - 1);
+	}
+	gem_irc_app_append(app, buffer, kind, row);
+	if (carry)
+		memmove(row + indent, space + 1, carry);
+	memset(row, ' ', indent);
+	*length = carry + indent;
+}
+
+/* stream text into wrapped rows and drop mIRC formatting */
 static void
 gem_irc_app_stream_text(GEM_IRC_APP *app, GEM_IRC_APP_BUFFER *buffer,
 	GEM_IRC_UBYTE kind, GEM_IRC_UWORD *length, const char *text)
 {
 	GEM_IRC_UWORD limit;
+	char value;
 
 	if (!text)
 		return;
 	limit = app->display_columns;
-	while (*text) {
-		if (*length >= limit) {
-			app->format_line[*length] = '\0';
-			gem_irc_app_append(app, buffer, kind, app->format_line);
-			*length = 0;
+	while ((value = *text++) != '\0') {
+		if (value == '\003') {
+			if (gem_irc_app_digit(*text)) {
+				text++;
+				if (gem_irc_app_digit(*text))
+					text++;
+				if (*text == ',' && gem_irc_app_digit(text[1])) {
+					text += 2;
+					if (gem_irc_app_digit(*text))
+						text++;
+				}
+			}
+			continue;
 		}
-		app->format_line[*length] = *text++;
-		(*length)++;
+		if (value == '\002' || value == '\017' || value == '\021'
+			|| value == '\026' || value == '\035' || value == '\036'
+			|| value == '\037')
+			continue;
+		if (value == '\t')
+			value = ' ';
+		if (*length >= limit)
+			gem_irc_app_wrap_row(app, buffer, kind, length);
+		app->format_line[(*length)++] = value;
 	}
 }
 
@@ -348,7 +419,7 @@ gem_irc_app_status(GEM_IRC_APP *app, GEM_IRC_APP_BUFFER *buffer,
 	gem_irc_app_stream_finish(app, buffer, kind, length);
 }
 
-/* build an event line from up to five optional pieces */
+/* build one event line */
 static void
 gem_irc_app_event_line(GEM_IRC_APP *app, GEM_IRC_APP_BUFFER *buffer,
 	GEM_IRC_UBYTE kind, const char *first,
@@ -385,7 +456,7 @@ gem_irc_app_is_channel(const char *target)
 		|| *target == '+';
 }
 
-/* reset one buffer to an empty ring of the given kind */
+/* reset one buffer */
 static void
 gem_irc_app_buffer_reset(GEM_IRC_APP_BUFFER *buffer, GEM_IRC_UBYTE kind)
 {
@@ -394,15 +465,12 @@ gem_irc_app_buffer_reset(GEM_IRC_APP_BUFFER *buffer, GEM_IRC_UBYTE kind)
 	buffer->line_head = 0;
 	buffer->line_count = 0;
 	buffer->scroll_offset = 0;
+	buffer->appended = 0;
 	buffer->name[0] = '\0';
 	buffer->topic[0] = '\0';
 }
 
-/*
- * find, or optionally open, the private buffer for one nick, a full
- * table returns buffer zero so the overflow message lands in the main
- * transcript
- */
+/* find or open one private buffer */
 static GEM_IRC_UWORD
 gem_irc_app_pm_index(GEM_IRC_APP *app, const char *nick, GEM_IRC_WORD create)
 {
@@ -438,7 +506,7 @@ gem_irc_app_pm_buffer(GEM_IRC_APP *app, const char *nick, GEM_IRC_WORD create)
 			create));
 }
 
-/* rename any open private buffer whose peer just changed nick */
+/* rename a private buffer with its peer */
 static void
 gem_irc_app_pm_rename(GEM_IRC_APP *app, const char *old_name,
 	const char *new_name)
@@ -462,17 +530,13 @@ gem_irc_app_pm_rename(GEM_IRC_APP *app, const char *old_name,
 	}
 }
 
-/*
- * pick the buffer an incoming message lands in, channel text stays in
- * buffer zero, text sent to the local nick opens or reuses the sender's
- * private buffer
- */
+/* route incoming text to server, channel or query */
 static GEM_IRC_APP_BUFFER *
 gem_irc_app_route(GEM_IRC_APP *app, const GEM_IRC_EVENT *event,
 	const char *source)
 {
 	if (event->target && gem_irc_app_is_channel(event->target))
-		return gem_irc_app_buffer_ptr(app, 0);
+		return gem_irc_app_buffer_ptr(app, GEM_IRC_APP_CHANNEL);
 	if (event->nick && *event->nick && app->protocol.nick[0]
 		&& event->target
 		&& gem_irc_equal(event->target, app->protocol.nick))
@@ -480,20 +544,22 @@ gem_irc_app_route(GEM_IRC_APP *app, const GEM_IRC_EVENT *event,
 	return gem_irc_app_buffer_ptr(app, 0);
 }
 
-/* set or clear which channel buffer zero represents */
+/* set the joined channel */
 static GEM_IRC_WORD
 gem_irc_app_channel_set(GEM_IRC_APP *app, const char *channel)
 {
 	GEM_IRC_APP_BUFFER *home;
 	GEM_IRC_WORD result;
 
-	home = gem_irc_app_buffer_ptr(app, 0);
+	home = gem_irc_app_buffer_ptr(app, GEM_IRC_APP_CHANNEL);
+	if (!gem_irc_equal(home->name, channel))
+		gem_irc_app_buffer_reset(home, GEM_IRC_APP_BUFFER_CHANNEL);
 	result = gem_irc_app_copy_exact(home->name, GEM_IRC_APP_TARGET_SIZE,
 		channel);
 	if (result == GEM_IRC_OK) {
 		home->kind = GEM_IRC_APP_BUFFER_CHANNEL;
-		app->dirty |= GEM_IRC_APP_DIRTY_TARGET | GEM_IRC_APP_DIRTY_TOPIC
-			| GEM_IRC_APP_DIRTY_TABS;
+		gem_irc_app_switch(app, GEM_IRC_APP_CHANNEL);
+		app->dirty |= GEM_IRC_APP_DIRTY_ALL;
 	}
 	return result;
 }
@@ -503,21 +569,23 @@ gem_irc_app_channel_clear(GEM_IRC_APP *app)
 {
 	GEM_IRC_APP_BUFFER *home;
 
-	home = gem_irc_app_buffer_ptr(app, 0);
+	home = gem_irc_app_buffer_ptr(app, GEM_IRC_APP_CHANNEL);
 	home->name[0] = '\0';
 	home->topic[0] = '\0';
-	home->kind = GEM_IRC_APP_BUFFER_SERVER;
+	home->kind = GEM_IRC_APP_BUFFER_FREE;
+	if (app->active == GEM_IRC_APP_CHANNEL)
+		gem_irc_app_switch(app, 0);
 	app->dirty |= GEM_IRC_APP_DIRTY_TARGET | GEM_IRC_APP_DIRTY_TOPIC
 		| GEM_IRC_APP_DIRTY_TABS;
 }
 
-/* true when target names the channel buffer zero currently holds */
+/* true when target names the joined channel */
 static GEM_IRC_WORD
 gem_irc_app_is_home_channel(GEM_IRC_APP *app, const char *target)
 {
 	GEM_IRC_APP_BUFFER *home;
 
-	home = gem_irc_app_buffer_ptr(app, 0);
+	home = gem_irc_app_buffer_ptr(app, GEM_IRC_APP_CHANNEL);
 	if (home->kind != GEM_IRC_APP_BUFFER_CHANNEL || !home->name[0])
 		return 0;
 	return target && gem_irc_equal(target, home->name);
@@ -528,7 +596,7 @@ gem_irc_app_home_channel(GEM_IRC_APP *app)
 {
 	GEM_IRC_APP_BUFFER *home;
 
-	home = gem_irc_app_buffer_ptr(app, 0);
+	home = gem_irc_app_buffer_ptr(app, GEM_IRC_APP_CHANNEL);
 	if (home->kind == GEM_IRC_APP_BUFFER_CHANNEL && home->name[0])
 		return home->name;
 	return "";
@@ -538,7 +606,7 @@ static GEM_IRC_APP_BUFFER *
 gem_irc_app_echo_buffer(GEM_IRC_APP *app, const char *target)
 {
 	if (gem_irc_app_is_channel(target))
-		return gem_irc_app_buffer_ptr(app, 0);
+		return gem_irc_app_buffer_ptr(app, GEM_IRC_APP_CHANNEL);
 	return gem_irc_app_pm_buffer(app, target, 1);
 }
 
@@ -550,9 +618,9 @@ gem_irc_app_transport_output(void *opaque, const char *line,
 	GEM_IRC_WORD result;
 
 	app = (GEM_IRC_APP *) opaque;
-	if (!app || !app->transport.write)
+	if (!app || !app->socket)
 		return GEM_IRC_NO_OUTPUT;
-	result = app->transport.write(app->transport.context, line, length);
+	result = gem_irc_transport_write(app->socket, line, length);
 	if (result < 0)
 		app->connected = 0;
 	return result;
@@ -563,6 +631,7 @@ gem_irc_app_protocol_event(void *opaque, const GEM_IRC_EVENT *event)
 {
 	GEM_IRC_APP *app;
 	GEM_IRC_APP_BUFFER *home;
+	GEM_IRC_APP_BUFFER *server;
 	GEM_IRC_APP_BUFFER *dest;
 	const char *source;
 	const char *text;
@@ -571,7 +640,8 @@ gem_irc_app_protocol_event(void *opaque, const GEM_IRC_EVENT *event)
 	app = (GEM_IRC_APP *) opaque;
 	if (!app || !event)
 		return;
-	home = gem_irc_app_buffer_ptr(app, 0);
+	server = gem_irc_app_buffer_ptr(app, 0);
+	home = gem_irc_app_buffer_ptr(app, GEM_IRC_APP_CHANNEL);
 	source = gem_irc_app_source(event);
 	text = event->text ? event->text : "";
 
@@ -579,7 +649,7 @@ gem_irc_app_protocol_event(void *opaque, const GEM_IRC_EVENT *event)
 	case GEM_IRC_EVENT_REGISTERED:
 		app->connected = 1;
 		app->dirty |= GEM_IRC_APP_DIRTY_TOPIC;
-		gem_irc_app_status(app, home, GEM_IRC_APP_LINE_STATUS,
+		gem_irc_app_status(app, server, GEM_IRC_APP_LINE_STATUS,
 			"*** ", text, (const char *) 0);
 		break;
 	case GEM_IRC_EVENT_PING:
@@ -606,15 +676,15 @@ gem_irc_app_protocol_event(void *opaque, const GEM_IRC_EVENT *event)
 			"-", source, "- ", text, (const char *) 0);
 		break;
 	case GEM_IRC_EVENT_JOIN:
-		gem_irc_app_event_line(app, home, GEM_IRC_APP_LINE_STATUS,
-			"*** ", source, " + ", event->target, (const char *) 0);
 		if (app->protocol.nick[0]
 			&& gem_irc_equal(source, app->protocol.nick)) {
 			(void) gem_irc_app_channel_set(app, event->target);
 			gem_irc_app_roster_clear(app);
-			gem_irc_app_roster_add(app, source);
+			gem_irc_app_roster_add(app, source, '\0');
 		} else if (gem_irc_app_is_home_channel(app, event->target))
-			gem_irc_app_roster_add(app, source);
+			gem_irc_app_roster_add(app, source, '\0');
+		gem_irc_app_event_line(app, home, GEM_IRC_APP_LINE_STATUS,
+			"*** ", source, " + ", event->target, (const char *) 0);
 		break;
 	case GEM_IRC_EVENT_PART:
 		gem_irc_app_event_line(app, home, GEM_IRC_APP_LINE_STATUS,
@@ -683,15 +753,15 @@ gem_irc_app_protocol_event(void *opaque, const GEM_IRC_EVENT *event)
 			"*** ", source, " mode ", text, (const char *) 0);
 		break;
 	case GEM_IRC_EVENT_NICK_IN_USE:
-		gem_irc_app_status(app, home, GEM_IRC_APP_LINE_ERROR,
+		gem_irc_app_status(app, server, GEM_IRC_APP_LINE_ERROR,
 			"*** Nick in use: ", event->target, (const char *) 0);
 		break;
 	case GEM_IRC_EVENT_ERROR:
-		gem_irc_app_status(app, home, GEM_IRC_APP_LINE_ERROR,
+		gem_irc_app_status(app, server, GEM_IRC_APP_LINE_ERROR,
 			"*** Error: ", text, (const char *) 0);
 		break;
 	default:
-		gem_irc_app_event_line(app, home, GEM_IRC_APP_LINE_STATUS,
+		gem_irc_app_event_line(app, server, GEM_IRC_APP_LINE_STATUS,
 			"*** ",
 			event->command ? event->command : "status",
 			*text ? " " : (const char *) 0,
@@ -701,39 +771,40 @@ gem_irc_app_protocol_event(void *opaque, const GEM_IRC_EVENT *event)
 }
 
 void
-gem_irc_app_init(GEM_IRC_APP *app, const GEM_IRC_APP_TRANSPORT *transport)
+gem_irc_app_init(GEM_IRC_APP *app, struct gem_irc_transport *socket)
 {
 	GEM_IRC_UWORD index;
+	GEM_IRC_APP_BUFFER *buffer;
 
 	if (!app)
 		return;
-	if (transport)
-		app->transport = *transport;
-	else {
-		app->transport.write = (GEM_IRC_APP_WRITE) 0;
-		app->transport.poll = (GEM_IRC_APP_POLL) 0;
-		app->transport.close = (GEM_IRC_APP_CLOSE) 0;
-		app->transport.context = (void *) 0;
-	}
+	app->socket = socket;
 	app->connected = 0;
 	app->closing = 0;
 	app->dirty = GEM_IRC_APP_DIRTY_ALL;
 	app->active = 0;
-	app->buffer_count = 1;
+	app->buffer_count = 2;
 	app->display_columns = GEM_IRC_APP_DISPLAY_SIZE - 1U;
 	app->input_length = 0;
 	app->input_cursor = 0;
 	app->nick_count = 0;
 	app->nick_overflow = 0;
+	app->input_full = 0;
+	app->history_count = 0;
+	app->history_head = 0;
+	app->history_view = 0;
 	app->input[0] = '\0';
-	app->last_input[0] = '\0';
+	index = 0;
+	while (index < GEM_IRC_APP_HISTORY_SLOTS)
+		app->history[index++][0] = '\0';
 	app->network_line[0] = '\0';
 	app->command_line[0] = '\0';
 	app->format_line[0] = '\0';
 	index = 0;
+	buffer = app->buffers;
 	while (index < GEM_IRC_APP_BUFFERS) {
-		gem_irc_app_buffer_reset(gem_irc_app_buffer_ptr(app, index),
-			GEM_IRC_APP_BUFFER_FREE);
+		app->order[index] = buffer;
+		gem_irc_app_buffer_reset(buffer++, GEM_IRC_APP_BUFFER_FREE);
 		index++;
 	}
 	gem_irc_app_buffer_reset(gem_irc_app_buffer_ptr(app, 0),
@@ -778,6 +849,20 @@ gem_irc_app_connection_failed(GEM_IRC_APP *app)
 		(const char *) 0);
 }
 
+void
+gem_irc_app_offline(GEM_IRC_APP *app, const char *reason)
+{
+	if (!app)
+		return;
+	app->connected = 0;
+	gem_irc_connection_reset(&app->protocol);
+	gem_irc_app_roster_clear(app);
+	app->dirty |= GEM_IRC_APP_DIRTY_TOPIC | GEM_IRC_APP_DIRTY_TABS;
+	gem_irc_app_status(app, gem_irc_app_buffer_ptr(app, 0),
+		GEM_IRC_APP_LINE_STATUS, "*** ",
+		reason ? reason : "Disconnected", (const char *) 0);
+}
+
 GEM_IRC_WORD
 gem_irc_app_start(GEM_IRC_APP *app, const char *nick, const char *user,
 	const char *real_name)
@@ -810,8 +895,18 @@ gem_irc_app_start(GEM_IRC_APP *app, const char *nick, const char *user,
 GEM_IRC_WORD
 gem_irc_app_join(GEM_IRC_APP *app, const char *channel, const char *key)
 {
-	if (!app)
+	const char *previous;
+	GEM_IRC_WORD result;
+
+	if (!app || !channel || !gem_irc_app_is_channel(channel)
+		|| strchr(channel, ','))
 		return GEM_IRC_BAD_ARGUMENT;
+	previous = gem_irc_app_home_channel(app);
+	if (*previous && !gem_irc_equal(previous, channel)) {
+		result = gem_irc_send_part(&app->protocol, previous, "Changing channel");
+		if (result <= 0)
+			return result;
+	}
 	return gem_irc_send_join(&app->protocol, channel, key);
 }
 
@@ -844,7 +939,7 @@ gem_irc_app_request_close(GEM_IRC_APP *app, const char *reason)
 	if (app->closing)
 		return GEM_IRC_OK;
 	result = GEM_IRC_OK;
-	if (app->connected && app->transport.write)
+	if (app->connected && app->socket)
 		result = gem_irc_send_quit(&app->protocol,
 			reason ? reason : "GEM IRC closed");
 	app->closing = 1;
@@ -858,11 +953,11 @@ gem_irc_app_disconnect(GEM_IRC_APP *app, const char *reason)
 	if (!app)
 		return;
 	/* /quit already sent QUIT before it set the closing flag */
-	if (app->connected && !app->closing && app->transport.write)
+	if (app->connected && !app->closing && app->socket)
 		(void) gem_irc_send_quit(&app->protocol,
 			reason ? reason : "GEM IRC closed");
-	if (app->transport.close)
-		app->transport.close(app->transport.context);
+	if (app->socket)
+		gem_irc_transport_close(app->socket);
 	app->connected = 0;
 	app->closing = 1;
 	app->dirty |= GEM_IRC_APP_DIRTY_TOPIC;
@@ -898,12 +993,12 @@ gem_irc_app_poll(GEM_IRC_APP *app, GEM_IRC_UWORD limit)
 	GEM_IRC_UWORD length;
 	GEM_IRC_WORD result;
 
-	if (!app || !app->transport.poll)
+	if (!app || !app->socket)
 		return GEM_IRC_NO_OUTPUT;
 	processed = 0;
 	while (processed < limit) {
 		length = 0;
-		result = app->transport.poll(app->transport.context,
+		result = gem_irc_transport_poll(app->socket,
 			app->network_line, GEM_IRC_LINE_MAX, &length);
 		if (result == 0)
 			break;
@@ -913,9 +1008,8 @@ gem_irc_app_poll(GEM_IRC_APP *app, GEM_IRC_UWORD limit)
 				app->dirty |= GEM_IRC_APP_DIRTY_TOPIC;
 				gem_irc_app_roster_clear(app);
 				gem_irc_connection_reset(&app->protocol);
-				if (app->transport.close)
-					app->transport.close(app->
-						transport.context);
+				if (app->socket)
+					gem_irc_transport_close(app->socket);
 				gem_irc_app_status(app,
 					gem_irc_app_buffer_ptr(app, 0),
 					GEM_IRC_APP_LINE_ERROR,
@@ -1011,11 +1105,24 @@ gem_irc_app_help(GEM_IRC_APP *app, GEM_IRC_APP_BUFFER *view)
 static void
 gem_irc_app_submit_done(GEM_IRC_APP *app)
 {
-	(void) gem_irc_app_copy_exact(app->last_input,
-		GEM_IRC_APP_INPUT_SIZE, app->input);
+	GEM_IRC_UWORD last;
+
+	last = app->history_head ? (GEM_IRC_UWORD) app->history_head - 1U
+		: GEM_IRC_APP_HISTORY_SLOTS - 1U;
+	if (!app->history_count || strcmp(app->history[last], app->input)) {
+		(void) gem_irc_app_copy_exact(app->history[app->history_head],
+			GEM_IRC_APP_INPUT_SIZE, app->input);
+		app->history_head++;
+		if (app->history_head >= GEM_IRC_APP_HISTORY_SLOTS)
+			app->history_head = 0;
+		if (app->history_count < GEM_IRC_APP_HISTORY_SLOTS)
+			app->history_count++;
+	}
+	app->history_view = 0;
 	app->input[0] = '\0';
 	app->input_length = 0;
 	app->input_cursor = 0;
+	app->input_full = 0;
 	app->dirty |= GEM_IRC_APP_DIRTY_INPUT;
 }
 
@@ -1031,9 +1138,13 @@ gem_irc_app_send_failure(GEM_IRC_APP *app, GEM_IRC_APP_BUFFER *view,
 		gem_irc_app_status(app, view, GEM_IRC_APP_LINE_ERROR,
 			"*** Invalid command characters", (const char *) 0,
 			(const char *) 0);
+	else if (!app->connected)
+		gem_irc_app_status(app, view, GEM_IRC_APP_LINE_ERROR,
+			"*** Not connected: the line waits, press Return again",
+			(const char *) 0, (const char *) 0);
 	else
 		gem_irc_app_status(app, view, GEM_IRC_APP_LINE_ERROR,
-			"*** Transport did not accept command",
+			"*** Still sending: press Return again",
 			(const char *) 0, (const char *) 0);
 	return result;
 }
@@ -1089,7 +1200,7 @@ gem_irc_app_submit(GEM_IRC_APP *app)
 	if (gem_irc_equal(command, "join")) {
 		first = gem_irc_app_word(&cursor);
 		second = gem_irc_app_word(&cursor);
-		result = gem_irc_send_join(&app->protocol, first, second);
+		result = gem_irc_app_join(app, first, second);
 	} else if (gem_irc_equal(command, "part")) {
 		if (*arguments && gem_irc_app_is_channel(arguments)) {
 			cursor = arguments;
@@ -1219,6 +1330,40 @@ gem_irc_app_submit(GEM_IRC_APP *app)
 	return gem_irc_app_send_failure(app, view, result);
 }
 
+GEM_IRC_WORD
+gem_irc_app_set_input(GEM_IRC_APP *app, const char *text)
+{
+	GEM_IRC_UWORD length;
+	GEM_IRC_WORD result;
+
+	if (!app || !text)
+		return GEM_IRC_BAD_ARGUMENT;
+	result = gem_irc_app_copy_exact(app->input, GEM_IRC_APP_INPUT_SIZE,
+		text);
+	if (result != GEM_IRC_OK)
+		return result;
+	length = 0;
+	while (app->input[length])
+		length++;
+	app->input_length = length;
+	app->input_cursor = length;
+	app->input_full = 0;
+	app->history_view = 0;
+	app->dirty |= GEM_IRC_APP_DIRTY_INPUT;
+	return GEM_IRC_OK;
+}
+
+void
+gem_irc_app_set_cursor(GEM_IRC_APP *app, GEM_IRC_UWORD cursor)
+{
+	if (!app)
+		return;
+	if (cursor > app->input_length)
+		cursor = app->input_length;
+	app->input_cursor = cursor;
+	app->dirty |= GEM_IRC_APP_DIRTY_INPUT;
+}
+
 static void
 gem_irc_app_delete_range(GEM_IRC_APP *app, GEM_IRC_UWORD first,
 	GEM_IRC_UWORD last)
@@ -1236,24 +1381,106 @@ gem_irc_app_delete_range(GEM_IRC_APP *app, GEM_IRC_UWORD first,
 		app->input[destination++] = app->input[source++];
 	app->input_length -= removed;
 	app->input_cursor = first;
+	app->input_full = 0;
 	app->dirty |= GEM_IRC_APP_DIRTY_INPUT;
 }
 
 static void
-gem_irc_app_restore_last(GEM_IRC_APP *app)
+gem_irc_app_history(GEM_IRC_APP *app, GEM_IRC_WORD direction)
 {
+	GEM_IRC_UWORD index;
+	GEM_IRC_UWORD view;
 	GEM_IRC_UWORD length;
 
-	if (!app->last_input[0])
+	if (!app->history_count)
 		return;
+	if (direction < 0) {
+		if (app->history_view < app->history_count)
+			app->history_view++;
+	} else if (app->history_view) {
+		app->history_view--;
+	}
+	if (!app->history_view) {
+		app->input[0] = '\0';
+		app->input_length = 0;
+		app->input_cursor = 0;
+		app->dirty |= GEM_IRC_APP_DIRTY_INPUT;
+		return;
+	}
+	index = app->history_head;
+	view = app->history_view;
+	while (view--) {
+		if (!index)
+			index = GEM_IRC_APP_HISTORY_SLOTS;
+		index--;
+	}
 	(void) gem_irc_app_copy_exact(app->input, GEM_IRC_APP_INPUT_SIZE,
-		app->last_input);
+		app->history[index]);
 	length = 0;
 	while (app->input[length])
 		length++;
 	app->input_length = length;
 	app->input_cursor = length;
 	app->dirty |= GEM_IRC_APP_DIRTY_INPUT;
+}
+
+static GEM_IRC_WORD
+gem_irc_app_prefix_match(const char *name, const char *prefix,
+	GEM_IRC_UWORD length)
+{
+	while (length--) {
+		if (!*name || gem_irc_app_fold(*name++) !=
+			gem_irc_app_fold(*prefix++))
+			return 0;
+	}
+	return 1;
+}
+
+static void
+gem_irc_app_complete_nick(GEM_IRC_APP *app)
+{
+	const GEM_IRC_APP_NICK *nick;
+	GEM_IRC_UWORD start;
+	GEM_IRC_UWORD prefix_length;
+	GEM_IRC_UWORD name_length;
+	GEM_IRC_UWORD index;
+	GEM_IRC_UWORD output;
+
+	if (app->input_cursor != app->input_length)
+		return;
+	start = app->input_cursor;
+	while (start && app->input[start - 1U] != ' ')
+		start--;
+	prefix_length = app->input_cursor - start;
+	if (!prefix_length)
+		return;
+	index = 0;
+	while (index < (GEM_IRC_UWORD) app->nick_count) {
+		nick = gem_irc_app_nick_at(app, index++);
+		if (!gem_irc_app_prefix_match(nick->text, app->input + start,
+				prefix_length))
+			continue;
+		name_length = 0;
+		while (nick->text[name_length])
+			name_length++;
+		if (start + name_length + (start ? 1U : 2U)
+			>= GEM_IRC_APP_INPUT_SIZE)
+			return;
+		output = 0;
+		while (output < name_length) {
+			app->input[start + output] = nick->text[output];
+			output++;
+		}
+		if (!start)
+			app->input[start + output++] = ':';
+		app->input[start + output++] = ' ';
+		app->input[start + output] = '\0';
+		app->input_length = start + output;
+		app->input_cursor = app->input_length;
+		app->history_view = 0;
+		app->dirty |= GEM_IRC_APP_DIRTY_INPUT;
+		return;
+	}
 }
 
 GEM_IRC_WORD
@@ -1285,6 +1512,10 @@ gem_irc_app_key(GEM_IRC_APP *app, GEM_IRC_UWORD key, GEM_IRC_UWORD visible_rows)
 		gem_irc_app_cycle(app, -1);
 		return GEM_IRC_APP_KEY_HANDLED;
 	}
+	if (ascii == 9U) {
+		gem_irc_app_complete_nick(app);
+		return GEM_IRC_APP_KEY_HANDLED;
+	}
 	if (scan == 0x4900U) {
 		gem_irc_app_scroll_up(app, visible_rows, visible_rows);
 		return GEM_IRC_APP_KEY_HANDLED;
@@ -1294,14 +1525,11 @@ gem_irc_app_key(GEM_IRC_APP *app, GEM_IRC_UWORD key, GEM_IRC_UWORD visible_rows)
 		return GEM_IRC_APP_KEY_HANDLED;
 	}
 	if (scan == 0x4800U) {
-		gem_irc_app_restore_last(app);
+		gem_irc_app_history(app, -1);
 		return GEM_IRC_APP_KEY_HANDLED;
 	}
 	if (scan == 0x5000U) {
-		app->input[0] = '\0';
-		app->input_length = 0;
-		app->input_cursor = 0;
-		app->dirty |= GEM_IRC_APP_DIRTY_INPUT;
+		gem_irc_app_history(app, 1);
 		return GEM_IRC_APP_KEY_HANDLED;
 	}
 	if (scan == 0x4b00U) {
@@ -1354,10 +1582,13 @@ gem_irc_app_key(GEM_IRC_APP *app, GEM_IRC_UWORD key, GEM_IRC_UWORD visible_rows)
 	if (ascii < 32U || ascii > 126U)
 		return GEM_IRC_APP_KEY_UNHANDLED;
 	if (app->input_length + 1U >= GEM_IRC_APP_INPUT_SIZE) {
-		gem_irc_app_status(app, gem_irc_app_active_buffer(app),
-			GEM_IRC_APP_LINE_ERROR,
-			"*** Input line is full", (const char *) 0,
-			(const char *) 0);
+		/* once, not for every key that follows */
+		if (!app->input_full)
+			gem_irc_app_status(app, gem_irc_app_active_buffer(app),
+				GEM_IRC_APP_LINE_ERROR,
+				"*** Input line is full", (const char *) 0,
+				(const char *) 0);
+		app->input_full = 1;
 		return GEM_IRC_APP_KEY_HANDLED;
 	}
 	index = app->input_length;
@@ -1443,15 +1674,17 @@ gem_irc_app_line_count(const GEM_IRC_APP *app)
 }
 
 GEM_IRC_UWORD
-gem_irc_app_visible_count(const GEM_IRC_APP *app, GEM_IRC_UWORD visible_rows)
+gem_irc_app_appended(const GEM_IRC_APP *app)
 {
-	const GEM_IRC_APP_BUFFER *buffer;
+	return gem_irc_app_const_buffer_ptr(app,
+		(GEM_IRC_UWORD) app->active)->appended;
+}
 
-	if (!app)
-		return 0;
-	buffer = gem_irc_app_const_buffer_ptr(app, (GEM_IRC_UWORD) app->active);
-	return buffer->line_count <
-		visible_rows ? buffer->line_count : visible_rows;
+GEM_IRC_UWORD
+gem_irc_app_scroll_offset(const GEM_IRC_APP *app)
+{
+	return gem_irc_app_const_buffer_ptr(app,
+		(GEM_IRC_UWORD) app->active)->scroll_offset;
 }
 
 const GEM_IRC_APP_LINE *
@@ -1476,9 +1709,8 @@ gem_irc_app_visible_line(const GEM_IRC_APP *app, GEM_IRC_UWORD row,
 	if (scroll > start)
 		scroll = start;
 	start -= scroll;
-	slot = buffer->line_head + start + row;
-	while (slot >= GEM_IRC_APP_SCROLL_LINES)
-		slot -= GEM_IRC_APP_SCROLL_LINES;
+	/* 32 slots wrap with one AND */
+	slot = (buffer->line_head + start + row) & (GEM_IRC_APP_SCROLL_LINES - 1U);
 	return gem_irc_app_const_line_at(buffer, slot);
 }
 
@@ -1571,14 +1803,6 @@ gem_irc_app_buffer_label(const GEM_IRC_APP *app, GEM_IRC_UWORD index)
 }
 
 GEM_IRC_UWORD
-gem_irc_app_buffer_kind(const GEM_IRC_APP *app, GEM_IRC_UWORD index)
-{
-	if (!app || index >= (GEM_IRC_UWORD) app->buffer_count)
-		return GEM_IRC_APP_BUFFER_FREE;
-	return gem_irc_app_const_buffer_ptr(app, index)->kind;
-}
-
-GEM_IRC_UWORD
 gem_irc_app_buffer_activity(const GEM_IRC_APP *app, GEM_IRC_UWORD index)
 {
 	if (!app || index >= (GEM_IRC_UWORD) app->buffer_count)
@@ -1594,6 +1818,8 @@ gem_irc_app_switch(GEM_IRC_APP *app, GEM_IRC_UWORD index)
 	if (!app || index >= (GEM_IRC_UWORD) app->buffer_count)
 		return;
 	buffer = gem_irc_app_buffer_ptr(app, index);
+	if (buffer->kind == GEM_IRC_APP_BUFFER_FREE || app->active == index)
+		return;
 	buffer->activity = 0;
 	app->active = (GEM_IRC_UBYTE) index;
 	app->dirty |= GEM_IRC_APP_DIRTY_ALL;
@@ -1607,15 +1833,17 @@ gem_irc_app_cycle(GEM_IRC_APP *app, GEM_IRC_WORD direction)
 	if (!app || app->buffer_count <= 1)
 		return;
 	index = (GEM_IRC_UWORD) app->active;
-	if (direction < 0) {
-		if (index == 0)
-			index = (GEM_IRC_UWORD) app->buffer_count;
-		index--;
-	} else {
-		index++;
-		if (index >= (GEM_IRC_UWORD) app->buffer_count)
-			index = 0;
-	}
+	do {
+		if (direction < 0) {
+			if (index == 0)
+				index = (GEM_IRC_UWORD) app->buffer_count;
+			index--;
+		} else {
+			index++;
+			if (index >= (GEM_IRC_UWORD) app->buffer_count)
+				index = 0;
+		}
+	} while (app->order[index]->kind == GEM_IRC_APP_BUFFER_FREE);
 	gem_irc_app_switch(app, index);
 }
 
@@ -1623,24 +1851,30 @@ GEM_IRC_WORD
 gem_irc_app_close_buffer(GEM_IRC_APP *app, GEM_IRC_UWORD index)
 {
 	GEM_IRC_UWORD slot;
-	GEM_IRC_APP_BUFFER *destination;
-	GEM_IRC_APP_BUFFER *source;
+	GEM_IRC_APP_BUFFER *closed;
 
 	if (!app)
 		return GEM_IRC_BAD_ARGUMENT;
 	/* buffer zero never closes */
 	if (index == 0 || index >= (GEM_IRC_UWORD) app->buffer_count)
 		return 0;
-	/* pack the table down, a buffer holds no pointer so plain assignment works */
+	if (index == GEM_IRC_APP_CHANNEL) {
+		if (!app->connected) {
+			gem_irc_app_channel_clear(app);
+			return GEM_IRC_OK;
+		}
+		return gem_irc_send_part(&app->protocol,
+			gem_irc_app_home_channel(app), "Leaving");
+	}
+	/* move pointers, not scrollback */
+	closed = app->order[index];
 	slot = index;
 	while (slot + 1U < (GEM_IRC_UWORD) app->buffer_count) {
-		destination = gem_irc_app_buffer_ptr(app, slot);
-		source = gem_irc_app_buffer_ptr(app, slot + 1U);
-		*destination = *source;
+		app->order[slot] = app->order[slot + 1U];
 		slot++;
 	}
-	gem_irc_app_buffer_reset(gem_irc_app_buffer_ptr(app, slot),
-		GEM_IRC_APP_BUFFER_FREE);
+	app->order[slot] = closed;
+	gem_irc_app_buffer_reset(closed, GEM_IRC_APP_BUFFER_FREE);
 	app->buffer_count--;
 	if ((GEM_IRC_UWORD) app->active >= index) {
 		if (app->active > 0)
@@ -1648,6 +1882,8 @@ gem_irc_app_close_buffer(GEM_IRC_APP *app, GEM_IRC_UWORD index)
 	}
 	if ((GEM_IRC_UWORD) app->active >= (GEM_IRC_UWORD) app->buffer_count)
 		app->active = (GEM_IRC_UBYTE) (app->buffer_count - 1U);
+	if (app->order[app->active]->kind == GEM_IRC_APP_BUFFER_FREE)
+		app->active = 0;
 	gem_irc_app_buffer_ptr(app, (GEM_IRC_UWORD) app->active)->activity = 0;
 	app->dirty |= GEM_IRC_APP_DIRTY_ALL;
 	return GEM_IRC_OK;
@@ -1674,35 +1910,4 @@ gem_irc_app_query(GEM_IRC_APP *app, const char *nick)
 		"*** Private chat with ", nick, (const char *) 0);
 	gem_irc_app_switch(app, index);
 	return GEM_IRC_OK;
-}
-
-GEM_IRC_WORD
-gem_irc_app_part_active(GEM_IRC_APP *app)
-{
-	GEM_IRC_APP_BUFFER *view;
-
-	if (!app)
-		return GEM_IRC_BAD_ARGUMENT;
-	view = gem_irc_app_active_buffer(app);
-	if (view->kind == GEM_IRC_APP_BUFFER_CHANNEL && view->name[0])
-		return gem_irc_send_part(&app->protocol, view->name,
-			(const char *) 0);
-	/* on a private tab the same button closes the conversation */
-	if (app->active != 0)
-		return gem_irc_app_close_buffer(app,
-			(GEM_IRC_UWORD) app->active);
-	return GEM_IRC_BAD_ARGUMENT;
-}
-
-GEM_IRC_WORD
-gem_irc_app_names(GEM_IRC_APP *app)
-{
-	const char *channel;
-
-	if (!app)
-		return GEM_IRC_BAD_ARGUMENT;
-	channel = gem_irc_app_home_channel(app);
-	if (!*channel)
-		return GEM_IRC_BAD_ARGUMENT;
-	return gem_irc_app_raw_target(app, "NAMES", channel);
 }

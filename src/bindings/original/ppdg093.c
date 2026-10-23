@@ -11,12 +11,9 @@
 #include "ppdgem.h"
 #include "ppdg0.h"
 
-#if GEM_BINDINGS_ENABLE_DOS_PROCESS
-
 WORD proc_delete(WORD proc_num)
 {
         PR_NUM = proc_num;
         return( gem_if(PROC_DELETE) );
 }
 
-#endif /* GEM_BINDINGS_ENABLE_DOS_PROCESS */

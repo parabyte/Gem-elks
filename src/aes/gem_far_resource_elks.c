@@ -1,17 +1,11 @@
-/*
- * gem_far_resource_elks.c - ELKS paragraph allocation for GEM resources
- *
- * only linked into the resident AES owner, far resource segments come from
- * the stock _fmemalloc syscall, each block freed by its resident PD generation
- */
+/* direct ELKS paragraph allocation for GEM resources */
 
 #include <errno.h>
 #include <malloc.h>
 
 #include "gem_far_resource.h"
 
-/* _fmemalloc/_fmemfree are the raw paragraph syscalls from <malloc.h>,
- * not libc fmemalloc() which counts bytes */
+/* these calls take paragraphs */
 
 #define GEM_FAR_PARAGRAPH_MASK 15U
 
@@ -23,10 +17,7 @@ gem_far_resource_clear(GEM_FAR_RESOURCE *resource)
 	resource->bytes = 0;
 }
 
-/*
- * round bytes up to paragraphs, `(bytes + 15) >> 4` wraps for byte counts
- * 65521 through 65535 so we shift first and round after
- */
+/* round without overflowing */
 static UWORD
 gem_far_resource_paragraphs(UWORD bytes)
 {
@@ -63,10 +54,7 @@ gem_far_resource_alloc(GEM_FAR_RESOURCE *resource, UWORD bytes)
 	if (_fmemalloc((WORD) paragraphs, &segment) != 0)
 		return 0;
 
-	/*
-	 * segment starts at offset zero, so GEM resource offsets become far
-	 * pointers by copying just the segment word
-	 */
+	/* the new segment starts at offset zero */
 	resource->base.lo = 0;
 	resource->base.hi = (UWORD) segment;
 	resource->bytes = bytes;
@@ -95,7 +83,7 @@ gem_far_resource_copy_in(const GEM_FAR_RESOURCE *resource,
 {
 	UWORD segment;
 
-	/* subtract before comparing, `offset + count` can wrap */
+	/* subtract before comparing */
 	if (!resource || resource->base.lo != 0 || resource->base.hi == 0
 		|| resource->bytes == 0 || offset > resource->bytes
 		|| count > resource->bytes - offset) {
@@ -111,7 +99,7 @@ gem_far_resource_copy_in(const GEM_FAR_RESOURCE *resource,
 
 	segment = resource->base.hi;
 
-	/* DS:SI near source, ES:DI resource destination */
+	/* copy DS:SI to ES:DI */
 	__asm__ volatile ("pushw %%es\n\t"
 		"movw %3,%%es\n\t"
 		"cld\n\t"

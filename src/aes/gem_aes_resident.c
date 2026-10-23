@@ -1,25 +1,5 @@
-/*
- * gem_aes_resident.c - resident FreeGEM AES dispatcher for ELKS
- *
- * Dispatcher shape and local XIF arrays from FreeGEM AES GEMSUPER.C
- * (Digital Research, 1984-1987; GPL release by Caldera Thin Clients,
- * Inc., 1999).  Selectors the ported managers don't cover return -1.
- *
- * one of four files making up the AES core:
- *
- *   gem_aes_resident.c  this file - takes each AES trap, attaches and
- *                       detaches clients, and draws each manager's
- *                       screen effects
- *   gem_aes_tick.c      the per-tick loop: who owns each input sample,
- *                       and finishing parked calls
- *   gem_pending.c       the parked-request state machine and the
- *                       message queues
- *   gem_menu_seam.c     the menu half
- *
- * a call that cant finish in the trap gets parked, see gem_pending.h,
- * the *_defer helpers below are the parking spots. shared stuff lives
- * in gem_aes_internal.h and nowhere else
- */
+/* resident FreeGEM AES dispatcher for ELKS */
+/* dispatcher tables come from FreeGEM GEMSUPER.C */
 
 #include <errno.h>
 
@@ -36,7 +16,6 @@
 #include "gem_rsc.h"
 #include "gem_scrap_resident.h"
 #include "gem_system_resource.h"
-#include "gem_tape_resident.h"
 #include "gem_resource_resident.h"
 #include "gem_shell_resident.h"
 #include "gem_startup_resident.h"
@@ -53,15 +32,14 @@ GEM_FORM_EFFECTS gem_resident_form_effects;
 GEM_WINDOW_RESIDENT gem_resident_windows;
 GEM_WINDOW_EFFECTS gem_resident_window_effects;
 
-/* private call record for GRAF trackers grabbing the WIND_UPDATE lock */
+/* GRAF WIND_UPDATE request */
 static GEM_STARTUP_CALL gem_resident_graf_update_call;
 static GEM_STARTUP_EFFECTS gem_resident_graf_update_effects;
 static UWORD gem_resident_graf_update_control[C_SIZE];
 static UWORD gem_resident_graf_update_input[1];
 static UWORD gem_resident_graf_update_output[1];
 
-/* XIF isnt reentrant, broker sends one request at a time and the
- * kernel wont let an owner trap into itself */
+/* the kernel sends one XIF request at a time */
 UWORD control[C_SIZE];
 UWORD aes_global[G_SIZE_RESIDENT];
 UWORD int_in[I_SIZE];
@@ -69,16 +47,16 @@ UWORD int_out[O_SIZE];
 GEM_BINDINGS_POINTER_SLOT addr_in[AI_SIZE];
 static GEM_BINDINGS_POINTER_SLOT addr_out[AO_SIZE];
 
-/* private XIF-shaped scratch for the W_ACTIVE frame tree, so drawing a
- * frame cant clobber the app arrays still waiting to copy back */
+/* W_ACTIVE frame scratch */
 static UWORD gem_resident_frame_control[C_SIZE];
 static UWORD gem_resident_frame_input[6];
 static UWORD gem_resident_frame_output[1];
 static GEM_BINDINGS_POINTER_SLOT gem_resident_frame_address[1];
 
 static BYTE gem_resident_command[GEM_RESIDENT_COMMAND_BYTES];
+static BYTE gem_resident_tail[GEM_PROC_TAIL_BYTES + 1U];
 
-/* near-data segment holding W_ACTIVE and its shared TEDINFO */
+/* segment holding W_ACTIVE */
 UWORD
 gem_resident_data_segment(VOID)
 {
@@ -88,8 +66,7 @@ gem_resident_data_segment(VOID)
 	return segment;
 }
 
-/* make sure the control record is long enough for this opcode so a
- * short one cant read stale scratch */
+/* reject short control records */
 static WORD
 gem_resident_control_valid(UWORD opcode)
 {
@@ -105,10 +82,6 @@ gem_resident_control_valid(UWORD opcode)
 		return control[1] >= 2 && control[2] >= 1 && control[3] >= 1;
 	case APPL_FIND:
 		return control[2] >= 1 && control[3] >= 1;
-	case APPL_TPLAY:
-		return control[1] >= 3 && control[3] >= 1;
-	case APPL_TRECORD:
-		return control[1] >= 2 && control[2] >= 1 && control[3] >= 1;
 	case APPL_YIELD:
 		return TRUE;
 	case APPL_EXIT:
@@ -248,12 +221,11 @@ gem_resident_control_valid(UWORD opcode)
 	case PROC_DELETE:
 		return control[1] >= 1 && control[2] >= 1;
 	case PROC_INFO:
-		return control[1] >= 1 && control[2] >= 3 && control[4] >= 5;
 	case PROC_MALLOC:
 	case PROC_MFREE:
-		return TRUE;
-	case PROC_SWITCH:
 	case PROC_SETBLOCK:
+		return control[2] >= 1;
+	case PROC_SWITCH:
 		return control[1] >= 1 && control[2] >= 1;
 	default:
 		/* unsupported opcodes return -1 later */
@@ -420,37 +392,6 @@ gem_resident_update_defer(const struct gemtrap_request *request, WORD channel,
 			pd->generation_lo, pd->generation_hi, output_offset))
 		return -1;
 	gem_pending_list_append(&gem_pending_update_waiters, (UBYTE) channel);
-	return GEM_AES_RESIDENT_DEFERRED;
-}
-
-/* record waits till the buffer fills and play waits till the tape runs
- * out. blocking in the trap would stall every other client, so park the
- * request and finish it when its tape ends */
-static WORD
-gem_resident_begin_tape(const struct gemtrap_request *request, WORD channel,
-	UWORD output_offset, WORD playing)
-{
-	GEM_RESIDENT_PD *pd;
-	WORD armed;
-
-	pd = gem_resident_pd_for_channel(channel);
-	if (!pd || pd->state != GEM_PD_ATTACHED)
-		return -1;
-	if (addr_in[0].hi != request->ds)
-		return -1;
-	if (playing)
-		armed = gem_tape_resident_play((UWORD) channel, request->ds,
-			addr_in[0].lo, int_in[0], (WORD) int_in[1]);
-	else
-		armed = gem_tape_resident_record((UWORD) channel, request->ds,
-			addr_in[0].lo, int_in[0]);
-	if (!armed)
-		return -1;
-	if (!gem_pending_park(request, channel, GEM_PENDING_TAPE, channel,
-			addr_in[0].lo, int_in[0], output_offset)) {
-		gem_tape_resident_detach((UWORD) channel);
-		return -1;
-	}
 	return GEM_AES_RESIDENT_DEFERRED;
 }
 
@@ -1022,15 +963,31 @@ gem_resident_appl_init(const struct gemtrap_request *request)
 	GEM_RESIDENT_PD *pd;
 	GEM_VDI_SCREEN *screen;
 	WORD channel;
+	WORD mapped;
+	WORD adopted;
 	UWORD index;
 
+	adopted = FALSE;
 	pd = gem_resident_pd_for_request(request, &channel);
 	if (!pd) {
-		/* the direct-linked build has one client, the Desktop, so
-		 * APPL_INIT always binds channel zero */
-		channel = GEM_PROC_DESKTOP;
-		if (!gem_resident_attach(request, channel))
+		/* keep a launched channel or adopt a shell-started task */
+		mapped = gem_proc_channel_for_pid(request->pid);
+		if (mapped >= 2)
+			channel = mapped;
+		else if (gem_resident_pds[GEM_PROC_DESKTOP].state == GEM_PD_FREE
+			&& (addr_in[0].lo || addr_in[0].hi))
+			channel = GEM_PROC_DESKTOP;
+		else {
+			if (!gem_proc_adopt_external(request->pid, &channel))
+				return -1;
+			adopted = TRUE;
+		}
+		if (!gem_resident_attach(request, channel)) {
+			if (adopted)
+				(void) gem_proc_release_external(channel,
+					request->pid);
 			return -1;
+		}
 	}
 	if (channel == GEM_PROC_DESKTOP)
 		gem_resident_nameit(gem_resident_pd_for_channel(channel),
@@ -1065,6 +1022,8 @@ gem_resident_appl_init(const struct gemtrap_request *request)
 		pd = gem_resident_pd_for_channel(channel);
 		if (pd)
 			(void) gem_resident_detach(request, pd, channel);
+		if (adopted)
+			(void) gem_proc_release_external(channel, request->pid);
 		return -1;
 	}
 	return channel;
@@ -1186,7 +1145,6 @@ gem_resident_drop_channel(WORD channel)
 	WORD result;
 
 	result = TRUE;
-	gem_tape_resident_detach((UWORD) channel);
 	pd = gem_resident_pd_for_channel(channel);
 	/* a held FORM or GRAF request may own visible pixels and one
 	 * WIND_UPDATE depth, restore both before GEMCTL_CANCEL unpins the
@@ -1267,6 +1225,37 @@ gem_resident_copy_command(const struct gemtrap_request *request,
 		index++;
 	}
 	return FALSE;
+}
+
+/* copy a classic command tail from the caller */
+static WORD
+gem_resident_copy_tail(const struct gemtrap_request *request,
+	GEM_BINDINGS_POINTER_SLOT pointer, BYTE **tail)
+{
+	UBYTE length;
+	UWORD bytes;
+
+	if (!tail)
+		return FALSE;
+	if (!pointer.lo && !pointer.hi) {
+		*tail = NULL;
+		return TRUE;
+	}
+	if (pointer.hi != request->ds
+		|| !gem_resident_memory_range(pointer.lo, 1U,
+			request->data_limit))
+		return FALSE;
+	gem_resident_memory_from(request->ds, pointer.lo, &length, 1U);
+	if (length > GEM_PROC_TAIL_BYTES)
+		return FALSE;
+	bytes = (UWORD) length + 1U;
+	if (!gem_resident_memory_range(pointer.lo, bytes,
+			request->data_limit))
+		return FALSE;
+	gem_resident_memory_from(request->ds, pointer.lo,
+		gem_resident_tail, bytes);
+	*tail = gem_resident_tail;
+	return TRUE;
 }
 
 /* fill the five resource words in the AES global array from this PD's
@@ -1665,8 +1654,19 @@ gem_resident_window(const struct gemtrap_request *request)
 		return -1;
 	if (!gem_resident_window_apply_effects(&gem_resident_window_effects))
 		return -1;
-	/* multi-application GEM re-routed raw input when the top window
-	 * changed owner, one client means nothing to switch */
+	/* route input to the top owner */
+	if (result
+		&& (control[0] == GEM_WINDOW_WIND_OPEN
+			|| control[0] == GEM_WINDOW_WIND_CLOSE
+			|| (control[0] == GEM_WINDOW_WIND_SET
+				&& (int_in[1] == GEM_WINDOW_WF_TOP
+					|| int_in[1] == GEM_WINDOW_WF_SIZTOP)))) {
+		top_owner = gem_window_resident_top_owner(&gem_resident_windows);
+		if (top_owner >= 0 && top_owner < GEM_PROC_CHANNELS
+			&& top_owner != GEM_PROC_AES
+			&& top_owner != gem_proc_foreground_channel())
+			(void) proc_switch(top_owner);
+	}
 	return result;
 }
 
@@ -1788,8 +1788,7 @@ gem_resident_event(const struct gemtrap_request *request, UWORD output_offset)
 	return result;
 }
 
-/* dispatch to the right manager by opcode. APPL_YIELD just returns, the
- * kernel scheduler picks what runs next */
+/* dispatch one AES opcode */
 static WORD
 crysbind1(const struct gemtrap_request *request, WORD opcode,
 	UWORD output_offset)
@@ -1812,12 +1811,6 @@ crysbind1(const struct gemtrap_request *request, WORD opcode,
 	case GEM_STARTUP_APPL_BVSET:
 	case GEM_STARTUP_APPL_BVEXT:
 		return gem_resident_startup(request, output_offset);
-	case APPL_TPLAY:
-	case APPL_TRECORD:
-		if (!gem_resident_pd_for_request(request, &channel))
-			return -1;
-		return gem_resident_begin_tape(request, channel,
-			output_offset, opcode == APPL_TPLAY);
 	case APPL_YIELD:
 		return gem_resident_pd_for_request(request, NULL) ? TRUE : -1;
 	case APPL_EXIT:
@@ -1828,6 +1821,8 @@ crysbind1(const struct gemtrap_request *request, WORD opcode,
 			return -1;
 		if (!gem_resident_detach(request, pd, channel))
 			return -1;
+		/* launched children stay until waitpid */
+		(void) gem_proc_release_external(channel, request->pid);
 		return TRUE;
 	case GEM_EVENT_EVNT_KEYBD:
 	case GEM_EVENT_EVNT_BUTTON:
@@ -1937,13 +1932,48 @@ crysbind(const struct gemtrap_request *request, WORD opcode,
 	if (!gem_resident_pd_for_request(request, NULL))
 		return -1;
 
-	/* these opcodes managed DOS memory arenas. ELKS owns processes and
-	 * memory, so theyre unsupported */
-	(void) tail;
-	(void) pd;
-	(void) result;
-	(void) opcode;
-	return -1;
+	switch (opcode) {
+	case PROC_CREATE:
+		result = proc_create(addr_in[0], addr_in[1], (WORD) int_in[0],
+			(WORD) int_in[1], (WORD *) &int_out[1]);
+		if (result && (WORD) int_out[1] >= 2) {
+			pd = gem_resident_pd_for_channel((WORD) int_out[1]);
+			if (pd)
+				gem_resident_clear_pd(pd);
+		}
+		return result;
+	case PROC_RUN:
+		if (!gem_resident_copy_command(request, addr_in[0])
+			|| !gem_resident_copy_tail(request, addr_in[1], &tail))
+			return -1;
+		pd = gem_resident_pd_for_channel((WORD) int_in[0]);
+		if (!pd || pd->state != GEM_PD_FREE)
+			return -1;
+		gem_resident_nameit(pd, gem_resident_command);
+		result = proc_run((WORD) int_in[0], (WORD) int_in[1],
+			(WORD) int_in[2], gem_resident_command, tail);
+		if (!result)
+			gem_resident_nameit(pd, NULL);
+		return result;
+	case PROC_DELETE:
+		result = proc_delete((WORD) int_in[0]);
+		if (result) {
+			pd = gem_resident_pd_for_channel((WORD) int_in[0]);
+			if (pd && pd->state == GEM_PD_FREE)
+				gem_resident_clear_pd(pd);
+		}
+		return result;
+	case PROC_INFO:
+	case PROC_MALLOC:
+	case PROC_MFREE:
+	case PROC_SETBLOCK:
+		/* ELKS owns process memory. */
+		return -1;
+	case PROC_SWITCH:
+		return proc_switch((WORD) int_in[0]);
+	default:
+		return -1;
+	}
 }
 
 /* copy the caller's parameter arrays in, dispatch, then copy back only
@@ -1974,8 +2004,7 @@ xif(struct gemtrap_request *request)
 	gem_resident_memory_from(request->ds, parameter_block.control.lo,
 		control, 10U);
 
-	/* RSRC_GADDR always copies one far result no matter what the control
-	 * record says, PROC_INFO still uses control[4] */
+	/* RSRC_GADDR always returns one far address. */
 	if (control[0] == RSRC_GADDR)
 		address_output_bytes = 4U;
 	else if (!gem_resident_memory_slot_bytes(control[4], AO_SIZE,
@@ -2037,7 +2066,7 @@ xif(struct gemtrap_request *request)
 	if (output_bytes && result != GEM_AES_RESIDENT_DEFERRED)
 		gem_resident_memory_to(int_out, request->ds,
 			parameter_block.intout.lo, output_bytes);
-	if ((control[0] == PROC_INFO || control[0] == RSRC_GADDR)
+	if (control[0] == RSRC_GADDR
 		&& address_output_bytes)
 		gem_resident_memory_to(addr_out, request->ds,
 			parameter_block.addrout.lo, address_output_bytes);
@@ -2078,9 +2107,56 @@ gem_aes_resident_ready(struct gemtrap_request *request)
 	return gem_pending_take_ready(request);
 }
 
-/* TRUE while any PD is attached. the server uses this after the Desktop
- * pipe closes to tell an orderly APPL_EXIT from a client that died
- * mid-session */
+/* tear down the exact kernel attachment */
+WORD
+gem_aes_resident_exit(struct gemtrap_request *request)
+{
+	GEM_RESIDENT_PD *pd;
+	WORD channel;
+	WORD matches;
+	WORD result;
+
+	gem_resident_initialize();
+	if (!request || request->cx != GEMTRAP_CX_EXIT
+		|| request->ax >= GEM_PROC_CHANNELS)
+		return FALSE;
+	channel = (WORD) request->ax;
+	pd = gem_resident_pd_for_channel(channel);
+	if (!pd)
+		return FALSE;
+	matches = pd->state == GEM_PD_ATTACHED
+		&& pd->pid == request->pid
+		&& pd->segment == request->ds
+		&& pd->task_slot == (UBYTE) request->slot
+		&& pd->generation_lo == request->generation_lo
+		&& pd->generation_hi == request->generation_hi;
+	if (matches) {
+		(void) gem_proc_release_external(channel, request->pid);
+		if (!gem_resident_drop_channel(channel))
+			return FALSE;
+		gem_resident_menu_detach_owner(pd, channel);
+		gem_resident_window_detach_owner(pd, channel);
+		gem_vdi_resident_release(channel);
+		if (!gem_resource_resident_cleanup(&pd->resource))
+			return FALSE;
+	}
+
+	/* the kernel owns the segment pin */
+	result = gemctl(GEMCTL_DETACH, request);
+	if (result != 0 && errno != ESRCH)
+		return FALSE;
+	if (matches) {
+		gem_shell_resident_detach((UWORD) channel,
+			pd->generation_lo, pd->generation_hi);
+		gem_startup_resident_detach((UWORD) channel,
+			pd->generation_lo, pd->generation_hi);
+		gem_resident_update_progress();
+		gem_resident_clear_pd(pd);
+	}
+	return TRUE;
+}
+
+/* true while one PD is attached */
 WORD
 gem_aes_resident_active(VOID)
 {

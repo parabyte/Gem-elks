@@ -1731,6 +1731,21 @@ gem_window_resident_next(const GEM_WINDOW_RESIDENT *manager, WORD handle)
 		? GEM_WINDOW_NIL : object->ob_next;
 }
 
+WORD
+gem_window_resident_top_owner(const GEM_WINDOW_RESIDENT *manager)
+{
+	const GEM_WINDOW_SLOT *slot;
+
+	if (!manager || !manager->ready || manager->top < GEM_WINDOW_ROOT
+		|| manager->top >= GEM_WINDOW_COUNT)
+		return GEM_WINDOW_NIL;
+	slot = manager->windows + manager->top;
+	if (manager->top != GEM_WINDOW_ROOT
+		&& !(slot->flags & GEM_WINDOW_VF_INTREE))
+		return GEM_WINDOW_NIL;
+	return slot->owner;
+}
+
 static VOID
 gem_window_active_add(OBJECT *objects, WORD parent, WORD child,
 	WORD x, WORD y, WORD width, WORD height)

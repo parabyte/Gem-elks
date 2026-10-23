@@ -1,11 +1,4 @@
-/*
- * gem_menu_seam.c - the resident AES's menu half
- *
- * the menu half of the AES, MENU_BAR, MENU_TEXT and the pull-down
- * calls, plus the drawing and restore the menu manager needs from the
- * core, the bar rule, the desk snapshot and putting back what a dropped
- * menu covered
- */
+/* resident AES menu calls and drawing */
 
 #include "gem_aes_internal.h"
 

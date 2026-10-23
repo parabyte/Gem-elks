@@ -1,16 +1,9 @@
-/*
- * gemclock.c - GEM digital clock
- *
- * standalone GEM client, talks to /bin/gem over the pipes like the
- * desktop, redraws the time each second off an AES timer
- */
+/* GEM clock, redrawn by an AES timer */
 
 #include <time.h>
 #include <unistd.h>
 
 #include "aes.h"
-
-WORD gem_client_install(VOID);
 
 #define CLOCK_X		80
 #define CLOCK_Y		50
@@ -90,7 +83,7 @@ main(int argc, char **argv)
 	(void) argc;
 	(void) argv;
 	(void) chdir("/lib/gemsys");
-	if (!gem_client_install())
+	if (!aescheck())
 		return 1;
 	if (appl_init((LPXBUF) 0) < 0)
 		return 1;

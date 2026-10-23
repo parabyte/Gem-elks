@@ -1086,22 +1086,12 @@ WORD hndl_msg()
 #if MULTIAPP
 	  case WM_ONTOP:
 		gl_untop = TRUE;
-		/*
-		 * Original MULTIAPP w_setmen() selected desk_tree[pid] and
-		 * menu_tree[pid] when a foreground application returned to
-		 * Desktop.  ELKS keeps each application alive, so SETTINGS sends
-		 * this same notification after closing its style-zero activation
-		 * window.  Reinstall the existing relocated Desktop trees directly;
-		 * no window, resource, or framebuffer copy crosses the process
-		 * boundary.  The following WM_REDRAW retains the historical
-		 * gl_untop menu-state refresh above.
-		 */
+		/* put the Desktop trees back */
 		wind_set(0, WF_NEWDESK, FP_OFF(G.a_screen),
 			 FP_SEG(G.a_screen), TRUE, FALSE);
 		menu_bar(G.a_trees[ADMENU], TRUE);
 		break;
 	  case PR_FINISH:
-		/* The ELKS process manager has already reaped and freed the slot. */
 		break;
 #endif
 	  case WM_CLOSED:
@@ -1466,18 +1456,11 @@ WORD GEMAIN(WORD ARGC, BYTE *ARGV[])
 	}
 
 #if MULTIAPP
-	/*
-	 * GEM/XM queried a DOS channel map here and flattened segment:offset
-	 * addresses so Desktop could carve application arenas itself.  ELKS owns
-	 * every process data/stack segment, so no physical address is exposed or
-	 * retained.  The original accessory discovery and menu flow continue to
-	 * run; only their memory owner changes.
-	 */
+	/* ELKS owns every process segment */
 	gl_bootdr = 'C';
 	gl_untop = 0;
-	proc_shrink(DESKPID);
 	iac_init();
-	/* ELKS exposes no truthful free-process-memory total to user space. */
+	/* hide process memory fields */
 	G.a_trees[ADDINFO][DEMEMSIZ].ob_flags |= HIDETREE;
 	G.a_trees[ADDINFO][DEMEMCAP].ob_flags |= HIDETREE;
 #else
@@ -1485,11 +1468,7 @@ WORD GEMAIN(WORD ARGC, BYTE *ARGV[])
 	G.a_trees[ADDINFO][DEMEMSIZ].ob_flags |= HIDETREE;
 	G.a_trees[ADDINFO][DEMEMCAP].ob_flags |= HIDETREE;
 #endif
-	/*
-	 * POSIX root is a namespace boundary, not a removable-media probe.
-	 * app_detect() is idempotent, so install it even when DESKTOP.INF came
-	 * from the resident shell buffer instead of being copied from disk.
-	 */
+	/* install the POSIX root icon */
 	app_detect();
 						/* initialize windows	*/
 	win_start();

@@ -1,8 +1,4 @@
-/*
- * gem_compat_aes.c - extra AES bindings the pinned import left out
- *
- * each one fills in the AES parameter block and calls gem_if()
- */
+/* direct AES bindings missing from the pinned import */
 
 #include "ppdgem.h"
 #include "ppdg0.h"
@@ -225,9 +221,7 @@ WORD *pnxt_obj;
 }
 
 
-/* the Scrap Manager. SCRP_READ fills the buffer with the scrap dir and
- * returns the file-type bit vector; buffer needs room for a path plus
- * its trailing separator */
+/* scrap directory calls */
 WORD
 scrp_read(pscrap)
 LPVOID pscrap;
@@ -250,30 +244,4 @@ WORD
 scrp_clear()
 {
 	return (gem_if(SCRP_CLEAR));
-}
-
-
-/* the event tape. both calls block until their tape ends; the resident
- * parks the request and answers when the tape runs out. one record is
- * six bytes */
-WORD
-appl_tplay(tbuffer, tlength, tscale)
-LPVOID tbuffer;
-WORD tlength, tscale;
-{
-	gem_bindings_store_pointer(&AP_TBUFFER, tbuffer);
-	AP_TLENGTH = tlength;
-	AP_TSCALE = tscale;
-	return (gem_if(APPL_TPLAY));
-}
-
-
-WORD
-appl_trecord(tbuffer, tlength)
-LPVOID tbuffer;
-WORD tlength;
-{
-	gem_bindings_store_pointer(&AP_TBUFFER, tbuffer);
-	AP_TLENGTH = tlength;
-	return (gem_if(APPL_TRECORD));
 }

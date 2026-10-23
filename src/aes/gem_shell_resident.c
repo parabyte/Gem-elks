@@ -1,13 +1,8 @@
-/*
- * gem_shell_resident.c - GEM shell calls for ELKS AES
- *
- * the SHEL_* shell calls (read/write/get/put/find/rdef/wdef), SHEL_WRITE
- * just records the next command and tail, gem_main.c runs it with
- * vfork/execv/waitpid once the writer exits
- */
+/* GEM shell calls, SHEL_WRITE starts an ELKS task */
 
 #include "gem_shell_resident.h"
 #include "gem_aes_call.h"
+#include "gem_proc.h"
 #include "gem_system_resource.h"
 
 #include <unistd.h>
@@ -19,7 +14,6 @@
 typedef struct gem_shell_pd {
 	UWORD generation_lo;
 	UWORD generation_hi;
-	WORD launch_channel;
 	WORD do_execute;
 	WORD is_gem;
 	WORD overlay;
@@ -243,7 +237,6 @@ gem_shell_reset_pd(GEM_SHELL_PD *pd)
 {
 	pd->generation_lo = 0;
 	pd->generation_hi = 0;
-	pd->launch_channel = -1;
 	pd->do_execute = FALSE;
 	pd->is_gem = FALSE;
 	pd->overlay = 0;
@@ -534,63 +527,25 @@ gem_shell_read(const GEM_SHELL_CALL *call, GEM_SHELL_PD *pd)
 	return gem_shell_finish(call, TRUE);
 }
 
-/*
- * pending record lives outside the PD slots, the writer's PD is gone
- * (APPL_EXIT) before the command gets used
- */
-static UBYTE gem_shell_pending;
-static UBYTE gem_shell_pending_command[GEM_SHELL_COMMAND_BYTES];
-static UBYTE gem_shell_pending_tail[GEM_SHELL_TAIL_BYTES];
-static WORD gem_shell_pending_is_gem;
-
 static WORD
 gem_shell_launch(GEM_SHELL_PD *pd)
 {
-	UBYTE *destination;
-	const UBYTE *source;
-	UWORD count;
+	GEM_U32_WORDS no_base;
+	GEM_U32_WORDS no_size;
+	WORD channel;
 
-	destination = gem_shell_pending_command;
-	source = pd->command;
-	count = GEM_SHELL_COMMAND_BYTES;
-	while (count--)
-		*destination++ = *source++;
-	destination = gem_shell_pending_tail;
-	source = pd->tail;
-	count = GEM_SHELL_TAIL_BYTES;
-	while (count--)
-		*destination++ = *source++;
-	gem_shell_pending_is_gem = pd->is_gem;
-	gem_shell_pending = TRUE;
-	pd->launch_channel = -1;
-	return TRUE;
-}
-
-WORD
-gem_shell_resident_take_command(UBYTE *command, UWORD command_bytes,
-	UBYTE *tail, UWORD tail_bytes, WORD *is_gem)
-{
-	UWORD count;
-	const UBYTE *source;
-	UBYTE *destination;
-
-	if (!gem_shell_pending || !command || !tail
-		|| command_bytes < GEM_SHELL_COMMAND_BYTES
-		|| tail_bytes < GEM_SHELL_TAIL_BYTES)
+	no_base.lo = 0;
+	no_base.hi = 0;
+	no_size.lo = 0;
+	no_size.hi = 0;
+	channel = -1;
+	if (!proc_create(no_base, no_size, FALSE, pd->is_gem, &channel))
 		return FALSE;
-	source = gem_shell_pending_command;
-	destination = command;
-	count = GEM_SHELL_COMMAND_BYTES;
-	while (count--)
-		*destination++ = *source++;
-	source = gem_shell_pending_tail;
-	destination = tail;
-	count = GEM_SHELL_TAIL_BYTES;
-	while (count--)
-		*destination++ = *source++;
-	if (is_gem)
-		*is_gem = gem_shell_pending_is_gem;
-	gem_shell_pending = FALSE;
+	if (!proc_run(channel, pd->is_gem, pd->overlay,
+			(LPBYTE) pd->command, (LPBYTE) pd->tail)) {
+		(void) proc_delete(channel);
+		return FALSE;
+	}
 	return TRUE;
 }
 

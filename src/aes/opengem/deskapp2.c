@@ -170,7 +170,7 @@ app_rdicon()
 	length = gl_iconstart + (NUM_NAMICS << 1);
 /*#endif*/
 	/* Load the icon bitblocks & strings */
-	G.a_datastart = dos_alloc_word((UWORD) length);
+	G.a_datastart = (LPBYTE) malloc((UWORD) length);
 	if (!G.a_datastart)
 	  return app_icon_fail('D');
 						/* read it		*/
@@ -226,7 +226,7 @@ app_rdicon()
 	if (!icon_offset((UWORD) num_masks, (UWORD) num_bytes, &temp))
 	  return app_icon_fail('M');
 	msk_bytes = temp;
-	G.a_buffstart = dos_alloc_word((UWORD) msk_bytes);
+	G.a_buffstart = (LPBYTE) malloc((UWORD) msk_bytes);
 	if (!G.a_buffstart)
 	  return app_icon_fail('B');
 						/* fix up icon pointers	*/

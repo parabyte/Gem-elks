@@ -41,8 +41,6 @@ WORD appl_exit(void);
 WORD appl_write(WORD rwid, WORD length, LPVOID pbuff);
 WORD appl_read(WORD rwid, WORD length, LPVOID pbuff);
 WORD appl_find(LPVOID pname);
-WORD appl_tplay(LPVOID tbuffer, WORD tlength, WORD tscale);
-WORD appl_trecord(LPVOID tbuffer, WORD tlength);
 WORD appl_bvset(UWORD bvdisk, UWORD bvhard);
 WORD appl_xbvget(GEM_U32_WORDS *bvdisk, GEM_U32_WORDS *bvhard);
 WORD appl_xbvset(GEM_U32_WORDS bvdisk, GEM_U32_WORDS bvhard);

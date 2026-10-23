@@ -657,7 +657,7 @@ gem_form_alert_input(GEM_FORM_PD *pd, const GEM_FORM_INPUT *input,
 	pd->previous_buttons = input->mouse_buttons;
 }
 
-/* --- the seams gem_form_resident.c reaches the alert through --- */
+/* form manager entry points */
 
 WORD
 gem_form_alert_owns(UWORD owner, UWORD generation_lo, UWORD generation_hi)

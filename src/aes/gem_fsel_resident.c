@@ -749,7 +749,7 @@ gem_form_fsel_progress(GEM_FORM_PD *pd, GEM_FORM_EFFECTS *effects)
 	effects->rectangle.height = root->ob_height;
 }
 
-/* --- the seams gem_form_resident.c reaches the selector through --- */
+/* form manager entry points */
 
 VOID
 gem_form_fsel_pointer(WORD y)

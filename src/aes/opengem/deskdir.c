@@ -775,25 +775,13 @@ MLOCAL void init_delete(LPTREE *tree)
 
 MLOCAL void init_copy(LPTREE *tree)
 {
-	UWORD		available;
-
-	/*
-	 * The ELKS Desktop is single-tasking and uses a near copy buffer.  Its
-	 * length is therefore one unscaled 16-bit byte count.  Keep the original
-	 * 512-byte reserve, cap the request below the segment end, and test before
-	 * subtracting so the reserve can never borrow through zero.
-	 */
-	available = dos_avail_word();
-	if (available > 0xfff0U)
-	  available = 0xfff0U;
-	if (available > 0x0200U)
-	  G.g_xlen = available - 0x0200U;
-	else
-	  G.g_xlen = 0;
-	if (G.g_xlen)
-	  G.g_xbuf = dos_alloc_word(G.g_xlen);
-	else
-	  G.g_xbuf = (LPBYTE) 0;
+	G.g_xlen = 0x2e00U;
+	G.g_xbuf = (LPBYTE) 0;
+	while (!G.g_xbuf && G.g_xlen >= 0x0200U) {
+	  G.g_xbuf = (LPBYTE) malloc(G.g_xlen);
+	  if (!G.g_xbuf)
+	    G.g_xlen -= 0x0200U;
+	}
 
 	ml_dlpr = G.g_ccopypref;
 	if (ml_dlpr)
@@ -1002,7 +990,7 @@ dir_op(op, psrc_path, pflist, pdst_path, pfcnt, pdcnt, psize,
 	  case OP_DELETE:
 	 	break;
 	  case OP_COPY:
-			dos_free(G.g_xbuf);
+			free(G.g_xbuf);
 			break;
 	} /* switch */
 	if (ml_havebox)

@@ -11,8 +11,6 @@
 #include "ppdgem.h"
 #include "ppdg0.h"
 
-#if GEM_BINDINGS_ENABLE_DOS_PROCESS
-
 WORD proc_create(GEM_BINDINGS_POINTER_SLOT ibegaddr,
 			GEM_BINDINGS_POINTER_SLOT isize,
 			WORD isswap, WORD isgem,
@@ -29,4 +27,3 @@ WORD proc_create(GEM_BINDINGS_POINTER_SLOT ibegaddr,
 	return(ret);
 }
 
-#endif /* GEM_BINDINGS_ENABLE_DOS_PROCESS */

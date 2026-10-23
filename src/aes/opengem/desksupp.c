@@ -849,30 +849,23 @@ romerr(curr)
 {
 
 #if MULTIAPP
-	/*
-	 * The ELKS port is deliberately single-tasking GEM.  The original XM
-	 * channel allocator depends on DOS paragraph addresses and is not part of
-	 * this target; a MULTIAPP build must provide a separate word-pair port.
-	 */
+	/* ELKS owns the formatter process memory */
 	(void) curr;
 
 #else
 	UWORD		seg;
 	LPVOID		testform;
-	UWORD		lavail;
-
-	lavail = dos_avail_word();
-	testform = dos_alloc_word(lavail);
+	testform = malloc(0x1b00U);
 	seg = FP_SEG(testform);
-	dos_free(testform);
+	free(testform);
 	testform = (LPVOID) 0;
 	if ( ((seg << 4) & 0xff00) >= 0xe900)
-	  testform = dos_alloc_word(0x1b00U);
+	  testform = malloc(0x1b00U);
 
 	pro_run(FALSE, 0, -1, curr);
 
 	if (testform)
-	  dos_free(testform);
+	  free(testform);
 
 #endif
 } /* romerr */

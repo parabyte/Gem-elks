@@ -1,11 +1,4 @@
-/*
- * dos.h - GEMDOS source compatibility backed by POSIX in libgem.
- *
- * 32-bit GEM ABI values are kept as two little-endian 16-bit words.
- * DOS date and time keep the original packed layouts:
- *   date: bits 15..9 year since 1980, 8..5 month, 4..0 day
- *   time: bits 15..11 hour, 10..5 minute, 4..0 second/2
- */
+/* original Desktop file API over ELKS */
 
 #ifndef ELKS_GEM_DOS_H
 #define ELKS_GEM_DOS_H
@@ -114,10 +107,7 @@ WORD dos_close(WORD handle);
 /*
  * Read and write counts need hi == 0 (a near buffer cannot cross
  * 64 KiB); a nonzero high word is refused with E_BADDATA.  A failed
- * lseek returns 0xffff:0xffff with DOS_ERR set, so the usual GEM
- * failure checks still work.  dos_alloc/dos_free are plain
- * malloc/free; dos_avail reports what is left of the Desktop's fixed
- * 12 KiB payload budget.
+ * lseek returns 0xffff:0xffff with DOS_ERR set.
  */
 GEM_U32_WORDS dos_read(WORD handle, GEM_U32_WORDS cnt, LPBYTE pbuffer);
 #define dos_read_word(handle, cnt, buffer) \
@@ -125,11 +115,6 @@ GEM_U32_WORDS dos_read(WORD handle, GEM_U32_WORDS cnt, LPBYTE pbuffer);
 				     (buffer)))
 GEM_U32_WORDS dos_lseek(WORD handle, WORD smode, GEM_U32_WORDS sofst);
 WORD dos_wait(VOID);
-LPVOID dos_alloc(GEM_U32_WORDS nbytes);
-#define dos_alloc_word(nbytes) dos_alloc(gem_u32_words((nbytes), 0))
-GEM_U32_WORDS dos_avail(VOID);
-#define dos_avail_word() gem_u32_to_u16_sat(dos_avail())
-WORD dos_free(LPVOID maddr);
 WORD dos_space(WORD drv, GEM_U32_WORDS *ptotal, GEM_U32_WORDS *pavail);
 WORD dos_rmdir(LPBYTE ppath);
 WORD dos_create(LPBYTE pname, WORD attr);

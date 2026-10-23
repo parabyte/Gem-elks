@@ -11,8 +11,6 @@
 #include "ppdgem.h"
 #include "ppdg0.h"
 
-#if GEM_BINDINGS_ENABLE_DOS_PROCESS
-
 WORD proc_run(WORD proc_num, WORD isgraf, WORD isover, LPBYTE pcmd,
 		                LPBYTE ptail)
 {
@@ -24,4 +22,3 @@ WORD proc_run(WORD proc_num, WORD isgraf, WORD isover, LPBYTE pcmd,
         return( gem_if(PROC_RUN) );
 }
 
-#endif /* GEM_BINDINGS_ENABLE_DOS_PROCESS */

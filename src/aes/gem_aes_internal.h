@@ -1,13 +1,4 @@
-/*
- * gem_aes_internal.h - shared internals of the resident AES core
- *
- * gem_aes_resident.c is the dispatcher and control loop, gem_menu_seam.c is the
- * menu half, which needs the same process descriptors, trap frame arrays and
- * drawing seams.
- *
- * nothing outside those files should include this header, the published
- * interface is gem_aes_resident.h
- */
+/* shared resident AES state */
 
 #ifndef ELKS_GEM_AES_INTERNAL_H
 #define ELKS_GEM_AES_INTERNAL_H
@@ -164,7 +155,7 @@ extern OBJECT gem_resident_menu_desk_object;
 extern GEM_WINDOW_RESIDENT gem_resident_windows;
 extern GEM_WINDOW_EFFECTS gem_resident_window_effects;
 
-/* --- seams shared between the dispatcher, the tick and the menu --- */
+/* shared dispatcher calls */
 
 /* first-use setup of every manager, safe to call repeatedly */
 VOID gem_resident_initialize(VOID);
@@ -213,7 +204,7 @@ WORD gem_resident_event_message(const struct gemtrap_request *request,
 /* hand a released WIND_UPDATE lock to the oldest live contender */
 VOID GEM_RESIDENT_COLD gem_resident_update_progress(VOID);
 
-/* --- the menu half, in gem_menu_seam.c --- */
+/* menu core */
 
 GEM_RESIDENT_PD *gem_resident_menu_owner(VOID);
 VOID gem_resident_menu_rectangle(const GEM_MENU_PULL_RECTANGLE *source,

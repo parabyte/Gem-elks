@@ -1,9 +1,4 @@
-/*
- * gem_app_vdi.c - VDI parameter arrays for standalone GEM apps
- *
- * the VDI bindings (-DUSER_INTIN) want these arrays as externs, the
- * desktop has its own in deskgraf.c, sizes match the desktop's
- */
+/* VDI trap arrays for standalone apps */
 
 #include "aes.h"
 

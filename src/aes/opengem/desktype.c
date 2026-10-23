@@ -2440,7 +2440,6 @@ WORD do_type(WORD curr)
     WORD	i;
     WORD	wh;			/* View window handle */
     WORD	drive;
-    UWORD	mem_avail;
     ANODE	*panode;
     WNODE *	pwnode;
     FNODE *	pfnode;
@@ -2525,32 +2524,12 @@ WORD do_type(WORD curr)
 
                 file_buffer_size = (work_area.g_w / gl_wchar + 2)
                     * (work_area.g_h / gl_hchar) + 1;
-#if 1
-		mem_avail = dos_avail_word();
-/* XXX We have no find yet
- 		if ( (LONG)file_buffer_size > mem_avail )
-		{
-			// See if there's memory being held by Find	
-		    release_last_find();
-		    mem_avail = dos_avail();
-		}
-*/
-	        if ( (UWORD)file_buffer_size > mem_avail )
-		{
-			/* Resize to fit avail space, preserving	*/
-			/*	divisibility. We know mem_avail fits	*/
-			/*	in a word because it's < size		*/
-			file_buffer_size = (WORD)mem_avail - 
-			    ((WORD)mem_avail % (work_area.g_x/ gl_wchar+2));
-		}
-		file_buffer = (UBYTE far *) dos_alloc(file_buffer_size);
-#else /* 1 */
                 do {
-                    if ((file_buffer
-                            = (UBYTE far *) dos_alloc(file_buffer_size)) == 0)
+                    file_buffer = (UBYTE far *) malloc(
+			(UWORD) file_buffer_size);
+                    if (!file_buffer)
                         file_buffer_size -= work_area.g_x / gl_wchar + 2;
-                } while (file_buffer == NULL && file_buffer_size > 0);
-#endif /* 1 */
+                } while (!file_buffer && file_buffer_size > 0);
                 if (file_buffer == NULL) {
                     menu_item_to_alert_s( /*0x0101*/1, STNOMEM, TYPITEM );
                     return_value = -5;
@@ -2587,7 +2566,7 @@ WORD do_type(WORD curr)
 
                 /* Finalisation */
 
-                    dos_free( file_buffer );
+                    free((LPVOID) file_buffer);
                 } /* endif NULL file_buffer */
    /* reset text alignment (JFL) */
                 vst_alignment(gl_handle, ALI_LEFT, ALI_BASE, &i, &i);

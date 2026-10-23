@@ -2,23 +2,17 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
-/*
- * gem_irc_layout.h - shared pixel constants for the GEM IRC UI
- *
- * the target build and the host layout smoke test use these exact values
- */
+/* fixed IRC window sizes */
 
-#ifndef ELKS_GEM_IRC_LAYOUT_H
-#define ELKS_GEM_IRC_LAYOUT_H
+#ifndef GEM_IRC_LAYOUT_H
+#define GEM_IRC_LAYOUT_H
 
-#define GEM_IRC_LAYOUT_MIN_WIDTH       400
-/* fits the topic strip, a few transcript rows, the editor, and the toolbar */
+#define GEM_IRC_LAYOUT_MIN_WIDTH       480
+/* one menu row, topic, transcript and input */
 #define GEM_IRC_LAYOUT_MIN_HEIGHT      176
-#define GEM_IRC_LAYOUT_MARGIN          16
-#define GEM_IRC_LAYOUT_INPUT_PADDING   6
-#define GEM_IRC_LAYOUT_TOPIC_PADDING   4
-#define GEM_IRC_LAYOUT_SIDE_WIDTH      104
-#define GEM_IRC_LAYOUT_PANE_PADDING    4
-#define GEM_IRC_LAYOUT_TEXT_SIZE       80U
+#define GEM_IRC_LAYOUT_MARGIN          4
+#define GEM_IRC_LAYOUT_TREE_WIDTH      104
+#define GEM_IRC_LAYOUT_CLOSE_WIDTH     12
+#define GEM_IRC_LAYOUT_SIDE_WIDTH      104	/* the nick list */
 
-#endif				/* ELKS_GEM_IRC_LAYOUT_H */
+#endif				/* GEM_IRC_LAYOUT_H */

@@ -1,24 +1,15 @@
-/*
- * JCE 1-3-1998: this replaces GEMASM.ASM.
- *
- * The original replacement used a DOS compiler's int86x helper.  ELKS does
- * not provide that DOS register-union ABI, and calling through such a helper
- * would add avoidable setup on an 8088.  The small GNU ia16 seam below keeps
- * the original INT EF register contract directly.
- */
+/* JCE 1-3-1998: replaces GEMASM.ASM. ELKS enters INT EFh directly. */
 
 #include "ppdgem.h"
 
 #define GEM_VECTOR_OFFSET 0x03bcU
-
-static AESFUNC pAes = NULL;
 
 UWORD
 gem_bindings_data_segment(VOID)
 {
 	UWORD segment;
 
-	/* MOV from DS is an original 8086 instruction and changes no flags. */
+	/* read the caller data segment */
 	__asm__ volatile ("movw %%ds,%0" : "=r" (segment));
 	return segment;
 }
@@ -34,11 +25,7 @@ gem_bindings_store_pointer(GEM_BINDINGS_POINTER_SLOT *slot,
 	} value;
 #endif
 
-	/*
-	 * GNU ia16 near data pointers are one unscaled 16-bit byte offset.  A
-	 * non-null pointer therefore needs the current DS in the high word when
-	 * it crosses the classic GEM far-pointer ABI.  No arithmetic is done.
-	 */
+	/* turn a near pointer into DS:offset */
 	if (!pointer) {
 		slot->lo = 0;
 		slot->hi = 0;
@@ -66,11 +53,7 @@ gem_bindings_load_pointer(const GEM_BINDINGS_POINTER_SLOT *slot)
 	value.words = *slot;
 	return value.pointer;
 #else
-	/*
-	 * A near C pointer cannot retain a foreign segment.  Accept 0:0 as null
-	 * and DS-relative addresses exactly; reject every other segment instead
-	 * of silently truncating it.  The offset is copied without rounding.
-	 */
+	/* near pointers only reach DS */
 	if (!slot->lo && !slot->hi)
 		return NULL;
 	if (slot->hi != gem_bindings_data_segment())
@@ -84,11 +67,7 @@ gem_bindings_far_word(UWORD segment, UWORD offset)
 {
 	UWORD value;
 
-	/*
-	 * ES is saved and restored so callers retain the GNU C data-segment
-	 * environment.  BX contains the exact 16-bit byte offset; an address at
-	 * the end of a segment wraps exactly as an 8086 ES:BX memory reference.
-	 */
+	/* read one word from segment:offset */
 	__asm__ volatile ("pushw %%es\n\t"
 			  "movw %1,%%es\n\t"
 			  "movw %%es:(%%bx),%0\n\t"
@@ -114,18 +93,6 @@ gem_bindings_far_byte(UWORD segment, UWORD offset)
 	return value;
 }
 
-AESFUNC
-divert_aes(AESFUNC function)
-{
-	AESFUNC previous;
-
-	previous = pAes;
-	if (function == gem)
-		function = NULL;
-	pAes = function;
-	return previous;
-}
-
 WORD
 gem(GEM_BINDINGS_AESPB *parameter_block)
 {
@@ -135,18 +102,7 @@ gem(GEM_BINDINGS_AESPB *parameter_block)
 	UWORD zero;
 	WORD result;
 
-	if (pAes)
-		return (*pAes)(parameter_block);
-
-	/*
-	 * Original AES trap contract:
-	 *
-	 *   CX = 200, DX = 0, ES:BX = packed AES parameter block, INT EF.
-	 *
-	 * The parameter block is static near data in normal use.  Supplying DS
-	 * explicitly in ES preserves the original far-pointer calling convention
-	 * without a DOS register-union wrapper or a segment reload after return.
-	 */
+	/* CX=200, DX=0, ES:BX=parameter block */
 	offset = (UWORD) parameter_block;
 	segment = gem_bindings_data_segment();
 	selector = 200;
@@ -173,10 +129,7 @@ aescheck(VOID)
 	UWORD target_segment;
 	UWORD count;
 
-	/*
-	 * The real-mode interrupt table starts at 0000:0000 and stores each
-	 * vector as offset followed by segment.  INT EF begins at byte 03bc.
-	 */
+	/* INT EFh vector, offset then segment */
 	target_offset = gem_bindings_far_word(0, GEM_VECTOR_OFFSET);
 	target_segment = gem_bindings_far_word(0, GEM_VECTOR_OFFSET + 2);
 	target_offset += 2;

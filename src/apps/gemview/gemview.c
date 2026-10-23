@@ -13,8 +13,6 @@
 
 #include "gemview.h"
 
-WORD gem_client_install(VOID);
-
 static WORD handle;		/* VDI workstation handle */
 static WORD work_in[11];
 static WORD work_out[57];
@@ -579,7 +577,7 @@ main(int argc, char **argv)
 	(void) argc;
 	(void) argv;
 	(void) chdir("/lib/gemsys");
-	if (!gem_client_install())
+	if (!aescheck())
 		return 1;
 	if (appl_init((LPXBUF) 0) < 0)
 		return 1;

@@ -49,7 +49,6 @@
 #define GEM_PENDING_GRAF              4	/* a held GRAF_* interaction */
 #define GEM_PENDING_FORM              5	/* a modal form or alert */
 #define GEM_PENDING_UPDATE            6	/* WIND_UPDATE lock taken */
-#define GEM_PENDING_TAPE              7	/* APPL_TRECORD/TPLAY running */
 
 /* the null link, channel zero is real so 'none' cant be zero */
 #define GEM_PENDING_NONE              0xffU

@@ -1,8 +1,4 @@
-/*
- * Local compatibility include for the imported Pacific C binding sources.
- * All ordinary GEM declarations still come from aes.h; only the parameter
- * block wire representation is specialized for GNU ia16 and ELKS.
- */
+/* ELKS types for the imported Pacific C bindings */
 
 #ifndef ELKS_GEM_BINDINGS_PPDGEM_H
 #define ELKS_GEM_BINDINGS_PPDGEM_H

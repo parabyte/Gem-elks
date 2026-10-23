@@ -28,7 +28,6 @@
 #define GEM_GDIR_MAX 67
 #define GEM_MOUNT_NAME_MAX 32
 #define GEM_VOLUME_LABEL_MAX 11
-#define DOS_HEAP_BYTES 0x3000U
 
 typedef struct gem_search {
 	WORD used;
@@ -134,8 +133,7 @@ static const GEM_U32_WORDS dos_zero_words = { 0, 0 };
 union REGS DR;
 WORD DOS_ERR;
 
-/* DOS_AX holds the last error/status word the Desktop reads back. every
- * other emulated DOS register is gone */
+/* last Desktop error word */
 #define DOS_AX DR.x.ax
 
 static LPVOID current_dta;
@@ -989,7 +987,7 @@ dos_seek(WORD handle, UWORD smode, GEM_U32_WORDS offset)
 	return result;
 }
 
-/* the dos_* wrappers start here */
+/* Desktop entry points */
 WORD
 dos_chdir(LPBYTE pdrvpath)
 {
@@ -1155,47 +1153,6 @@ dos_wait(VOID)
 	}
 	dos_set_error(0);
 	return (WORD) status;
-}
-
-/* dos_alloc/dos_free are plain malloc/free */
-LPVOID
-dos_alloc(GEM_U32_WORDS nbytes)
-{
-	LPVOID maddr;
-
-	if (nbytes.hi || nbytes.lo == 0xffffU) {
-		dos_set_error(E_NOMEMORY);
-		return NULL;
-	}
-	maddr = malloc(nbytes.lo ? nbytes.lo : 1U);
-	if (!maddr) {
-		dos_set_error(E_NOMEMORY);
-		return NULL;
-	}
-	dos_set_error(0);
-	return maddr;
-}
-
-GEM_U32_WORDS
-dos_avail(VOID)
-{
-	GEM_U32_WORDS available;
-
-	/* ELKS malloc has no remaining-space query, so report a fixed figure
-	 * the Desktop can size its scratch requests against */
-	available.lo = DOS_HEAP_BYTES;
-	available.hi = 0;
-	dos_set_error(0);
-	return available;
-}
-
-WORD
-dos_free(LPVOID maddr)
-{
-	if (maddr)
-		free(maddr);
-	dos_set_error(0);
-	return TRUE;
 }
 
 WORD

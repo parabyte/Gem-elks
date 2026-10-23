@@ -109,10 +109,6 @@ WORD vrq_string(WORD handle, WORD max_length, WORD echo_mode,
 	WORD echo_xy[], BYTE string[]);
 WORD vsm_string(WORD handle, WORD max_length, WORD echo_mode,
 	WORD echo_xy[], BYTE string[]);
-WORD vex_butv(WORD handle, LPVOID usercode, LPVOID *savecode);
-WORD vex_motv(WORD handle, LPVOID usercode, LPVOID *savecode);
-WORD vex_curv(WORD handle, LPVOID usercode, LPVOID *savecode);
-WORD vex_timv(WORD handle, LPVOID tim_addr, LPVOID *old_addr, WORD *scale);
 WORD vsc_form(WORD handle, WORD *cur_form);
 
 /* Inquiry functions */

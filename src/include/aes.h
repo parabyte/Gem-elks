@@ -1,13 +1,4 @@
-/*
- * aes.h - GEM-compatible AES/VDI API for libgem clients.
- *
- * The umbrella header.  What used to be written out here now lives in
- * the headers DRI shipped it in - gem_types.h, gsxdefs.h, obdefs.h,
- * gemdefs.h, aesbind.h and vdibind.h - and this include order is the
- * dependency order, so any one of them can also be included alone.
- * Only the legacy helper macros stay here, because they are this
- * port's compatibility layer rather than part of any GEM header.
- */
+/* GEM AES and VDI declarations */
 
 #ifndef ELKS_GEM_AES_H
 #define ELKS_GEM_AES_H
@@ -25,7 +16,7 @@
 #include "aesbind.h"
 #include "vdibind.h"
 
-/* Legacy helper macros (Pacific C style) */
+/* Pacific C helper names */
 #undef ADDR
 #define ADDR(p)        ((void *)(p))
 #define LBCOPY(d,s,n)  memcpy((d),(s),(n))

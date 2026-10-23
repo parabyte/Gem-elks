@@ -9,8 +9,6 @@
 
 #include "aes.h"
 
-WORD gem_client_install(VOID);
-
 #define CALC_X		96
 #define CALC_Y		40
 #define CALC_W		160
@@ -235,7 +233,7 @@ main(int argc, char **argv)
 	(void) argc;
 	(void) argv;
 	(void) chdir("/lib/gemsys");
-	if (!gem_client_install())
+	if (!aescheck())
 		return 1;
 	if (appl_init((LPXBUF) 0) < 0)
 		return 1;

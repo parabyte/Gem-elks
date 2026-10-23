@@ -612,23 +612,6 @@ gem_vdi_dispatch(const struct gemtrap_request *request, WORD application)
 				gem_vdi_control[4] = 0;
 			return TRUE;
 		}
-		/* these hand the driver a routine to call from an interrupt, the client
-		 * is a separate ELKS process so no vector can be installed, each reports
-		 * a null previous vector and the timer one still gives the BIOS tick
-		 * period */
-	case GEM_VDI_OP_TIMER_VECTOR:
-		gem_vdi_intout[0] = 55;
-		gem_vdi_control[4] = 1;
-		gem_vdi_control[9] = 0;
-		gem_vdi_control[10] = 0;
-		return TRUE;
-	case GEM_VDI_OP_BUTTON_VECTOR:
-	case GEM_VDI_OP_MOTION_VECTOR:
-	case GEM_VDI_OP_CURSOR_VECTOR:
-		gem_vdi_control[9] = 0;
-		gem_vdi_control[10] = 0;
-		gem_vdi_control[4] = 0;
-		return TRUE;
 	case GEM_VDI_OP_LINE_COLOR:
 		workstation->line_color = (WORD) gem_vdi_intin[0] & 15;
 		return gem_vdi_set_one_output(workstation->line_color);

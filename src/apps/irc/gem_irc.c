@@ -2,12 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
-/*
- * gem_irc.c - native GEM window front end for the ELKS IRC client
- *
- * GEM_IRC_TRANSPORT owns the one socket and hands complete lines to
- * gem_irc_app.c, the timer ticks every 100 ms so ten ticks is a second
- */
+/* native GEM front end for Antler IRC */
 
 #include "aes.h"
 #include "gem_irc_app.h"
@@ -15,93 +10,174 @@
 #include "gem_irc_transport.h"
 
 #include <string.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #define IRC_WINDOW_KIND (NAME | CLOSER | FULLER | MOVER | SIZER \
 	| UPARROW | DNARROW)
-#define IRC_WINDOW_MIN_WIDTH       GEM_IRC_LAYOUT_MIN_WIDTH
-#define IRC_WINDOW_MIN_HEIGHT      GEM_IRC_LAYOUT_MIN_HEIGHT
-#define IRC_WINDOW_MARGIN          GEM_IRC_LAYOUT_MARGIN
-#define IRC_INPUT_PADDING          GEM_IRC_LAYOUT_INPUT_PADDING
-#define IRC_TOPIC_PADDING          GEM_IRC_LAYOUT_TOPIC_PADDING
-#define IRC_SIDE_WIDTH             GEM_IRC_LAYOUT_SIDE_WIDTH
-#define IRC_PANE_PADDING           GEM_IRC_LAYOUT_PANE_PADDING
-#define IRC_DRAW_TEXT_SIZE         GEM_IRC_LAYOUT_TEXT_SIZE
-#define IRC_EVENT_TIMER_MS         100U
+#define IRC_TIMER_BUSY_MS          100U	/* while lines are arriving */
+#define IRC_TIMER_IDLE_MS          300U	/* after a few quiet polls */
+#define IRC_QUIET_POLLS            10U
+#define IRC_POLL_TICKS             2U	/* ticks between socket polls */
+#define IRC_QUIET_POLL_TICKS       6U	/* the same once polls find nothing */
+#define IRC_DRAW_TICKS             6U	/* between redraws as lines pour in */
+#define IRC_POLL_LINES             32U	/* lines taken per poll */
+#define IRC_KEY_BURST              16U	/* keys taken in one busy pass */
+#define IRC_ECHO_TICKS             2U	/* between echoes while keys come */
+#define IRC_ECHO_MS                110U	/* the same, for the event timer */
 #define IRC_RECONNECT_TICKS        50U
 #define IRC_CONNECT_TICKS          150U
 #define IRC_QUIT_FLUSH_TICKS       10U
 #define IRC_SMOKE_CONNECT_TICKS    600U
 #define IRC_SMOKE_DISPLAY_TICKS    20U
 #define IRC_DEFAULT_PORT           6667U
-#define IRC_BEG_UPDATE             1
-#define IRC_END_UPDATE             0
+#define IRC_DRAW_TEXT_BYTES        80U
+#define IRC_UI_DIRTY_MENU          0x0100U
+#define IRC_MENU_NONE              0U
+#define IRC_MENU_FILE              1U
+#define IRC_MENU_CHANNEL           2U
+#define IRC_MENU_USER              3U
+#define IRC_MENU_OPTIONS           4U
+#define IRC_MENU_HELP              5U
+#define IRC_MENU_COUNT             5U
+#define IRC_DIALOG_TEXT_BYTES      128U
 
-/*
- * the AES OBJECT-tree input line is the default build,
- * -DIRC_AES_INPUT=0 brings back the hand-drawn editor
- */
-#ifndef IRC_AES_INPUT
-#define IRC_AES_INPUT 1
-#endif
-/* the toolbar needs the left-button click in every build */
-#define IRC_EVENT_FLAGS  (MU_MESAG | MU_KEYBD | MU_TIMER | MU_BUTTON)
-#define IRC_EVENT_BCLK   1U
-#define IRC_EVENT_BMSK   1U
-#define IRC_EVENT_BST    1U
+#define IRC_ACTION_RECONNECT       1U
+#define IRC_ACTION_DISCONNECT      2U
+#define IRC_ACTION_QUIT            3U
+#define IRC_ACTION_JOIN            4U
+#define IRC_ACTION_PART            5U
+#define IRC_ACTION_TOPIC           6U
+#define IRC_ACTION_NAMES           7U
+#define IRC_ACTION_CLEAR           8U
+#define IRC_ACTION_QUERY           9U
+#define IRC_ACTION_MESSAGE         10U
+#define IRC_ACTION_WHOIS           11U
+#define IRC_ACTION_KICK            12U
+#define IRC_ACTION_NEXT            13U
+#define IRC_ACTION_PREVIOUS        14U
+#define IRC_ACTION_CLOSE_TAB       15U
+#define IRC_ACTION_COMMANDS        16U
+#define IRC_ACTION_SHORTCUTS       17U
+#define IRC_ACTION_ABOUT           18U
+#define IRC_ACTION_AWAY            19U
+#define IRC_ACTION_BACK            20U
+#define IRC_ACTION_OP              21U
+#define IRC_ACTION_DEOP            22U
+#define IRC_ACTION_VOICE           23U
+#define IRC_ACTION_DEVOICE         24U
+#define IRC_ACTION_CONNECT         25U
+#define IRC_ACTION_NICK            26U
 
-/* double a word, on ELKS an inline shift so gcc dont turn it into a MUL */
-#if defined(ELKS) && ELKS
-#define IRC_DOUBLE_WORD(value) \
-	__asm__ volatile ("shlw %0" : "+r" (value) : : "cc")
-#else
-#define IRC_DOUBLE_WORD(value) ((value) = (UWORD) ((value) + (value)))
-#endif
+typedef struct irc_menu_item {
+	const char *label;
+	UBYTE action;
+} IRC_MENU_ITEM;
+
+typedef struct irc_menu_desc {
+	const char *label;
+	const IRC_MENU_ITEM *items;
+	UBYTE count;
+	UBYTE columns;
+} IRC_MENU_DESC;
+
+static const IRC_MENU_ITEM irc_file_items[] = {
+	{ "Connect...", IRC_ACTION_CONNECT },
+	{ "Reconnect", IRC_ACTION_RECONNECT },
+	{ "Disconnect", IRC_ACTION_DISCONNECT },
+	{ "Quit", IRC_ACTION_QUIT }
+};
+static const IRC_MENU_ITEM irc_channel_items[] = {
+	{ "Join...", IRC_ACTION_JOIN }, { "Part", IRC_ACTION_PART },
+	{ "Topic...", IRC_ACTION_TOPIC }, { "Names", IRC_ACTION_NAMES },
+	{ "Clear", IRC_ACTION_CLEAR }
+};
+static const IRC_MENU_ITEM irc_user_items[] = {
+	{ "Query...", IRC_ACTION_QUERY }, { "Message...", IRC_ACTION_MESSAGE },
+	{ "Whois", IRC_ACTION_WHOIS }, { "Op", IRC_ACTION_OP },
+	{ "DeOp", IRC_ACTION_DEOP }, { "Voice", IRC_ACTION_VOICE },
+	{ "DeVoice", IRC_ACTION_DEVOICE }, { "Kick...", IRC_ACTION_KICK }
+};
+static const IRC_MENU_ITEM irc_options_items[] = {
+	{ "Nickname...", IRC_ACTION_NICK },
+	{ "Away...", IRC_ACTION_AWAY }, { "Back", IRC_ACTION_BACK },
+	{ "Next", IRC_ACTION_NEXT }, { "Previous", IRC_ACTION_PREVIOUS },
+	{ "Close tab", IRC_ACTION_CLOSE_TAB }
+};
+static const IRC_MENU_ITEM irc_help_items[] = {
+	{ "Commands", IRC_ACTION_COMMANDS },
+	{ "Shortcuts", IRC_ACTION_SHORTCUTS },
+	{ "About", IRC_ACTION_ABOUT }
+};
+static const IRC_MENU_DESC irc_menus[IRC_MENU_COUNT] = {
+	{ "File", irc_file_items, 4, 12 },
+	{ "Channel", irc_channel_items, 5, 10 },
+	{ "User", irc_user_items, 8, 12 },
+	{ "Options", irc_options_items, 6, 12 },
+	{ "Help", irc_help_items, 3, 11 }
+};
 
 static WORD irc_application = -1;
 static WORD irc_vdi = -1;
 static WORD irc_window = -1;
-static WORD irc_character_width;
-static WORD irc_character_height;
-static WORD irc_box_width;
-static WORD irc_box_height;
-static WORD irc_work_in[11];
+static WORD cw, ch;			/* character cell */
 static WORD irc_work_out[57];
 static WORD irc_message[8];
-static UWORD irc_event_mouse_x;
-static UWORD irc_event_mouse_y;
-static UWORD irc_event_mouse_buttons;
-static UWORD irc_event_key_state;
-static UWORD irc_event_key;
-static UWORD irc_event_clicks;
 static GRECT irc_desktop;
-static GRECT irc_work;
 static GRECT irc_previous;
-static GRECT irc_redraw_pending;
 static WORD irc_was_full;
+
+/* the layout, from the work area: see irc_layout() */
+static WORD wkx, wky, wkw, wkh;
+static WORD text_x;			/* transcript and input text, byte-aligned */
+static WORD menu_y, menu_h, tree_x, tree_right, tree_columns;
+static WORD topic_y, topic_h, body_y, input_y, rows, edit_x;
+static WORD pane_x;			/* nick list text, byte-aligned */
+static WORD columns, pane_columns, input_columns;
+static WORD tree_row[GEM_IRC_APP_BUFFERS];
+static WORD menu_x[IRC_MENU_COUNT + 1U];
+
+/* what the transcript shows now, to draw only what a change adds */
+static WORD shown_active = -1;
+static UWORD shown_appended;
+static UWORD shown_count;
+static UWORD shown_scroll;
 
 static GEM_IRC_APP irc_app;
 static GEM_IRC_TRANSPORT irc_transport;
-static GEM_IRC_APP_TRANSPORT irc_app_transport;
 
 static UBYTE irc_join_sent;
 static UBYTE irc_registration_started;
-static UBYTE irc_return_desktop;
 static UBYTE irc_smoke_enabled;
 static UBYTE irc_smoke_sent;
 static UWORD irc_connect_ticks;
 static UWORD irc_reconnect_ticks;
 static UWORD irc_quit_ticks;
 static UWORD irc_smoke_ticks;
-static BYTE irc_title[] = "GEM IRC";
-static BYTE irc_draw_text[IRC_DRAW_TEXT_SIZE];
+static UWORD irc_quiet_polls;
+static UWORD irc_poll_tick;		/* last socket poll */
+static UWORD irc_draw_tick;		/* and of the last transcript draw */
+static UWORD irc_echo_tick;		/* and of the last input line draw */
+static UWORD irc_pending;		/* changes not drawn yet */
+static UBYTE irc_menu;
+static UBYTE irc_manual_offline;
+static UBYTE irc_roster_scroll;
+static UBYTE irc_damage_all;
+static UBYTE irc_show_connect;
+static BYTE irc_title[] = "IRC Chat";
 static BYTE irc_server[GEM_IRC_TRANSPORT_HOST_SIZE];
 static BYTE irc_channel[GEM_IRC_APP_TARGET_SIZE];
 static BYTE irc_nick[GEM_IRC_NICK_SIZE];
 static BYTE irc_user[GEM_IRC_NICK_SIZE];
 static BYTE irc_real_name[64];
 static BYTE irc_smoke_message[GEM_IRC_APP_INPUT_SIZE];
+static BYTE irc_selected_nick[GEM_IRC_NICK_SIZE];
+static BYTE irc_ui_command[GEM_IRC_APP_INPUT_SIZE];
 static UWORD irc_port;
+
+static VOID irc_user_reconnect(VOID);
+static VOID irc_user_disconnect(VOID);
+static WORD irc_network_step(VOID);
 
 /* use up one 100 ms tick, counts stop at zero */
 static WORD
@@ -138,36 +214,22 @@ irc_copy(BYTE *destination, UWORD capacity, const BYTE *source)
 	return TRUE;
 }
 
-/* peel off one hex digit by repeated subtraction */
-static BYTE
-irc_take_hex_digit(UWORD *value, UWORD place)
-{
-	UBYTE digit;
-
-	digit = 0;
-	while (*value >= place && digit < 15U) {
-		*value -= place;
-		digit++;
-	}
-	if (digit < 10U)
-		return (BYTE) ('0' + digit);
-	return (BYTE) ('A' + digit - 10U);
-}
-
-/* seven-byte default nick, "GEM" plus the 16-bit ELKS process ID */
+/* GEM plus the pid */
 static VOID
 irc_make_default_nick(VOID)
 {
 	UWORD value;
+	WORD i;
+	static const char digits[] = "0123456789ABCDEF";
 
 	value = (UWORD) getpid();
 	irc_nick[0] = 'G';
 	irc_nick[1] = 'E';
 	irc_nick[2] = 'M';
-	irc_nick[3] = irc_take_hex_digit(&value, 4096U);
-	irc_nick[4] = irc_take_hex_digit(&value, 256U);
-	irc_nick[5] = irc_take_hex_digit(&value, 16U);
-	irc_nick[6] = irc_take_hex_digit(&value, 1U);
+	for (i = 6; i >= 3; i--) {
+		irc_nick[i] = digits[value & 15U];
+		value >>= 4;
+	}
 	irc_nick[7] = '\0';
 }
 
@@ -177,9 +239,6 @@ irc_parse_port(const BYTE *text, UWORD *port)
 {
 	UWORD value;
 	UWORD digit;
-	UWORD twice;
-	UWORD four;
-	UWORD eight;
 
 	if (!text || !*text || !port)
 		return FALSE;
@@ -190,13 +249,7 @@ irc_parse_port(const BYTE *text, UWORD *port)
 		digit = (UWORD) (*text++ - '0');
 		if (value > 6553U || (value == 6553U && digit > 5U))
 			return FALSE;
-		twice = value;
-		IRC_DOUBLE_WORD(twice);
-		four = twice;
-		IRC_DOUBLE_WORD(four);
-		eight = four;
-		IRC_DOUBLE_WORD(eight);
-		value = eight + twice + digit;
+		value = (UWORD) ((value << 3) + (value << 1) + digit);
 	}
 	if (!value)
 		return FALSE;
@@ -213,20 +266,14 @@ irc_configuration(WORD argc, BYTE **argv)
 	const BYTE *port_text;
 
 	server = (const BYTE *) "irc.starlink-irc.org";
-	channel = (const BYTE *) "#parabytetest";
+	channel = (const BYTE *) "#asperger";
 	nick = (const BYTE *) 0;
 	port_text = (const BYTE *) 0;
 	irc_smoke_enabled = 0;
 	irc_smoke_sent = 0;
 	irc_smoke_ticks = 0;
 	irc_smoke_message[0] = '\0';
-	irc_return_desktop = 0U;
-	/* swallow only the desktop's exact private invocation */
-	if (argc == 2 && argv[1]
-		&& !strcmp((const char *) argv[1], "--return-desktop")) {
-		irc_return_desktop = 1U;
-		argc = 1;
-	}
+	irc_show_connect = argc == 1;
 	if (argc > 1 && argv[1] && argv[1][0])
 		server = argv[1];
 	if (argc > 2 && argv[2] && argv[2][0])
@@ -236,7 +283,7 @@ irc_configuration(WORD argc, BYTE **argv)
 	if (argc > 4 && argv[4] && argv[4][0])
 		port_text = argv[4];
 	if (argc > 5) {
-		/* a normal desktop launch carries no flag, so it can never post */
+		/* normal launches cannot post smoke text */
 		if (argc != 7 || !argv[5]
 			|| strcmp((const char *) argv[5], "--smoke-once")
 			|| !argv[6] || !argv[6][0]
@@ -249,7 +296,7 @@ irc_configuration(WORD argc, BYTE **argv)
 	if (!irc_copy(irc_server, GEM_IRC_TRANSPORT_HOST_SIZE, server)
 		|| !irc_copy(irc_channel, GEM_IRC_APP_TARGET_SIZE, channel)
 		|| !irc_copy(irc_real_name, 64U,
-			(const BYTE *) "Native GEM IRC"))
+			(const BYTE *) "Antler IRC Chat"))
 		return FALSE;
 	if (nick) {
 		if (!irc_copy(irc_nick, GEM_IRC_NICK_SIZE, nick))
@@ -265,679 +312,59 @@ irc_configuration(WORD argc, BYTE **argv)
 	return TRUE;
 }
 
-/* the toolbar strip sits below the one-line editor, the rest lays out from here */
+/* text columns before limit */
 static WORD
-irc_toolbar_top_y(VOID)
+irc_fit(WORD x, WORD limit, WORD maximum)
 {
-	return irc_work.g_y + irc_work.g_h - irc_character_height - 4;
-}
+	WORD n = (limit - x) / cw;
 
-static WORD
-irc_input_top_y(VOID)
-{
-	return irc_toolbar_top_y() - irc_character_height - IRC_INPUT_PADDING;
-}
-
-/*
- * merge one AES damage rectangle into the pending bounding box, a zero
- * width marks the box empty
- */
-static VOID
-irc_queue_redraw(GRECT *request)
-{
-	WORD *incoming;
-	WORD *queued;
-	WORD edge;
-	UBYTE axes;
-
-	if (request->g_w <= 0 || request->g_h <= 0)
-		return;
-	if (irc_redraw_pending.g_w <= 0) {
-		irc_redraw_pending = *request;
-		return;
-	}
-
-	/* GRECT is x,y,w,h, so bumping both pointers turns the x/w pass into y/h */
-	incoming = &request->g_x;
-	queued = &irc_redraw_pending.g_x;
-	axes = 2U;
-	while (axes) {
-		edge = incoming[0] + incoming[2];
-		if (edge > queued[0] + queued[2])
-			queued[2] = edge - queued[0];
-		if (incoming[0] < queued[0]) {
-			queued[2] += queued[0] - incoming[0];
-			queued[0] = incoming[0];
-		}
-		incoming++;
-		queued++;
-		axes--;
-	}
-}
-
-/* a content or geometry change replaces any smaller pending rectangle */
-static VOID
-irc_queue_full_redraw(VOID)
-{
-	irc_redraw_pending = irc_work;
-}
-
-/* turn the controller's region mask into per-pane damage boxes */
-static VOID
-irc_queue_app_redraw(UWORD dirty)
-{
-	GRECT request;
-	WORD input_top;
-	WORD topic_bottom;
-	WORD right_edge;
-
-	if (!dirty)
-		return;
-	if ((dirty & GEM_IRC_APP_DIRTY_ALL) == GEM_IRC_APP_DIRTY_ALL) {
-		irc_queue_full_redraw();
-		return;
-	}
-
-	input_top = irc_input_top_y();
-	topic_bottom = irc_work.g_y + irc_character_height + IRC_TOPIC_PADDING;
-	right_edge = irc_work.g_x + irc_work.g_w - IRC_SIDE_WIDTH;
-
-	if (dirty & GEM_IRC_APP_DIRTY_TOPIC) {
-		request.g_x = irc_work.g_x;
-		request.g_y = irc_work.g_y;
-		request.g_w = irc_work.g_w;
-		request.g_h = irc_character_height + IRC_TOPIC_PADDING + 1;
-		irc_queue_redraw(&request);
-	}
-	if (dirty & GEM_IRC_APP_DIRTY_TRANSCRIPT) {
-		request.g_x = irc_work.g_x + IRC_SIDE_WIDTH;
-		request.g_y = topic_bottom;
-		request.g_w =
-			irc_work.g_w - IRC_SIDE_WIDTH - IRC_SIDE_WIDTH + 1;
-		request.g_h = input_top - topic_bottom + 1;
-		irc_queue_redraw(&request);
-	}
-	if (dirty & GEM_IRC_APP_DIRTY_TARGET) {
-		request.g_x = irc_work.g_x;
-		request.g_y = topic_bottom;
-		request.g_w = IRC_SIDE_WIDTH + 1;
-		request.g_h = input_top - topic_bottom + 1;
-		irc_queue_redraw(&request);
-	}
-	if (dirty & GEM_IRC_APP_DIRTY_ROSTER) {
-		request.g_x = right_edge;
-		request.g_y = topic_bottom;
-		request.g_w = IRC_SIDE_WIDTH;
-		request.g_h = input_top - topic_bottom + 1;
-		irc_queue_redraw(&request);
-	}
-	if (dirty & GEM_IRC_APP_DIRTY_INPUT) {
-		request.g_x = irc_work.g_x;
-		request.g_y = input_top;
-		request.g_w = irc_work.g_w;
-		request.g_h = irc_work.g_y + irc_work.g_h - input_top;
-		irc_queue_redraw(&request);
-	}
-	/* a tab change repaints the whole work area once */
-	if (dirty & GEM_IRC_APP_DIRTY_TABS) {
-		request.g_x = irc_work.g_x;
-		request.g_y = irc_work.g_y;
-		request.g_w = irc_work.g_w;
-		request.g_h = irc_work.g_h;
-		irc_queue_redraw(&request);
-	}
+	if (n > maximum)
+		n = maximum;
+	return n < 1 ? 1 : n;
 }
 
 static VOID
-irc_fill(WORD x, WORD y, WORD width, WORD height, WORD color)
+irc_layout(VOID)
 {
 	WORD xy[4];
+	WORD i, x;
 
-	if (width <= 0 || height <= 0)
-		return;
-	vsf_interior(irc_vdi, FIS_SOLID);
-	vsf_color(irc_vdi, color);
-	xy[0] = x;
-	xy[1] = y;
-	xy[2] = x + width - 1;
-	xy[3] = y + height - 1;
-	vr_recfl(irc_vdi, xy);
-}
-
-static UWORD
-irc_visible_rows(VOID)
-{
-	WORD remaining;
-	UWORD rows;
-
-	/* the transcript band is the gap between the topic strip and the editor */
-	remaining = irc_input_top_y()
-		- (irc_work.g_y + irc_character_height + IRC_TOPIC_PADDING);
-	rows = 0;
-	while (remaining >= irc_character_height
-		&& rows < GEM_IRC_APP_SCROLL_LINES) {
-		remaining -= irc_character_height;
-		rows++;
+	wind_get(irc_window, WF_WXYWH, &wkx, &wky, &wkw, &wkh);
+	tree_x = (wkx + 4 + 7) & ~7;
+	tree_right = tree_x + GEM_IRC_LAYOUT_TREE_WIDTH;
+	tree_columns = (GEM_IRC_LAYOUT_TREE_WIDTH - 16) / cw;
+	text_x = (tree_right + 8 + 7) & ~7;
+	menu_y = wky;
+	menu_h = ch + 4;
+	topic_y = menu_y + menu_h + 2;
+	topic_h = ch + 4;
+	body_y = topic_y + topic_h + 2;
+	input_y = wky + wkh - ch - 6;
+	rows = (input_y - 2 - body_y) / ch;
+	if (rows > (WORD) GEM_IRC_APP_SCROLL_LINES)
+		rows = GEM_IRC_APP_SCROLL_LINES;
+	if (rows < 1)
+		rows = 1;
+	pane_x = (wkx + wkw - GEM_IRC_LAYOUT_SIDE_WIDTH + 7) & ~7;
+	columns = irc_fit(text_x, pane_x - 12, GEM_IRC_APP_DISPLAY_SIZE - 1);
+	pane_columns = irc_fit(pane_x, wkx + wkw - 2, GEM_IRC_NICK_SIZE - 1);
+	edit_x = text_x + 9 * cw;
+	input_columns = irc_fit(edit_x, wkx + wkw - 4,
+		IRC_DRAW_TEXT_BYTES - 2);
+	x = tree_x;
+	for (i = 0; i < (WORD) IRC_MENU_COUNT; i++) {
+		menu_x[i] = x;
+		x += ((WORD) strlen(irc_menus[i].label) + 2) * cw;
 	}
-	return rows ? rows : 1U;
-}
-
-static UWORD
-irc_text_columns(WORD pixels, UWORD maximum)
-{
-	UWORD columns;
-
-	/* room for the text alignment padding */
-	pixels -= 7;
-	columns = 0;
-	while (pixels >= irc_character_width && columns < maximum) {
-		pixels -= irc_character_width;
-		columns++;
-	}
-	return columns;
-}
-
-/*
- * central transcript width in character cells, the app controller splits
- * its rows at the same count
- */
-static UWORD
-irc_transcript_columns(VOID)
-{
-	WORD pixels;
-
-	pixels = irc_work.g_w - IRC_SIDE_WIDTH - IRC_SIDE_WIDTH
-		- IRC_PANE_PADDING - IRC_PANE_PADDING;
-	if (pixels <= 0)
-		return 1U;
-	return irc_text_columns(pixels, GEM_IRC_APP_DISPLAY_SIZE - 1U);
-}
-
-#if defined(IRC_AES_INPUT) && IRC_AES_INPUT
-/*
- * the input line as a native AES OBJECT tree, one G_FTEXT field pointed
- * straight at irc_app.input, only the keys objc_edit understands go
- * through it, everything else stays with gem_irc_app_key
- */
-enum {
-	IRC_IN_ROOT = 0,
-	IRC_IN_FIELD = 1,
-	IRC_IN_COUNT
-};
-
-#define IRC_INPUT_TMPLT_MAX 128	/* template covers the visible columns */
-
-static OBJECT irc_input_tree[IRC_IN_COUNT] __attribute__((aligned(2)));
-static TEDINFO irc_input_ted __attribute__((aligned(2)));
-static BYTE irc_input_tmplt[IRC_INPUT_TMPLT_MAX + 1];
-static BYTE irc_input_valid[] = "X";	/* "X" allows any character anywhere */
-static WORD irc_input_idx;	/* objc_edit caret, mirrors input_cursor */
-static WORD irc_input_ready;
-static WORD irc_input_field_x;	/* screen x of the first editable glyph */
-
-/* build the two-node tree once, geometry is refreshed on every redraw */
-static VOID
-irc_input_build(VOID)
-{
-	OBJECT *root = &irc_input_tree[IRC_IN_ROOT];
-	OBJECT *field = &irc_input_tree[IRC_IN_FIELD];
-
-	root->ob_next = NIL;
-	root->ob_head = IRC_IN_FIELD;
-	root->ob_tail = IRC_IN_FIELD;
-	root->ob_type = G_IBOX;	/* transparent container, no paint */
-	root->ob_flags = NONE;
-	root->ob_state = NORMAL;
-	root->ob_spec.lo = 0;	/* G_IBOX: no frame, no fill */
-	root->ob_spec.hi = 0;
-	root->ob_x = 0;
-	root->ob_y = 0;
-	root->ob_width = 0;
-	root->ob_height = 0;
-
-	irc_input_ted.te_ptext = gem_near_pointer_words(irc_app.input);
-	irc_input_ted.te_ptmplt = gem_near_pointer_words(irc_input_tmplt);
-	irc_input_ted.te_pvalid = gem_near_pointer_words(irc_input_valid);
-	irc_input_ted.te_font = IBM;
-	irc_input_ted.te_junk1 = 0;
-	irc_input_ted.te_just = TE_LEFT;
-	irc_input_ted.te_color = 0x1100;
-	irc_input_ted.te_junk2 = 0;
-	irc_input_ted.te_thickness = 0;	/* G_FTEXT: no box border */
-	irc_input_ted.te_txtlen = GEM_IRC_APP_INPUT_SIZE;
-	irc_input_ted.te_tmplen = 1;
-
-	field->ob_next = IRC_IN_ROOT;
-	field->ob_head = NIL;
-	field->ob_tail = NIL;
-	field->ob_type = G_FTEXT;
-	field->ob_flags = EDITABLE | LASTOB;
-	field->ob_state = NORMAL;
-	field->ob_spec = gem_near_pointer_words(&irc_input_ted);
-	field->ob_x = 0;
-	field->ob_y = 0;
-	field->ob_width = 0;
-	field->ob_height = 0;
-
-	irc_input_tmplt[0] = '_';
-	irc_input_tmplt[1] = '\0';
-	irc_input_ready = 1;
-	/* EDINIT puts the caret at the current text length (empty => zero) */
-	irc_input_idx = 0;
-	(void) objc_edit(irc_input_tree, IRC_IN_FIELD, 0, &irc_input_idx,
-		EDINIT);
-}
-
-static VOID
-irc_input_ensure(VOID)
-{
-	if (!irc_input_ready)
-		irc_input_build();
-}
-
-/* refresh the field size and the underscore template to the visible columns */
-static VOID
-irc_input_layout(WORD strip_x, WORD strip_y, WORD prompt_x, WORD cols,
-	WORD cell_w, WORD cell_h)
-{
-	OBJECT *root = &irc_input_tree[IRC_IN_ROOT];
-	OBJECT *field = &irc_input_tree[IRC_IN_FIELD];
-	WORD index;
-
-	irc_input_ensure();
-	if (cols < 1)
-		cols = 1;
-	if (cols > IRC_INPUT_TMPLT_MAX)
-		cols = IRC_INPUT_TMPLT_MAX;
-	index = 0;
-	while (index < cols) {
-		irc_input_tmplt[index] = '_';
-		index++;
-	}
-	irc_input_tmplt[cols] = '\0';
-	irc_input_ted.te_tmplen = (WORD) (cols + 1);
-
-	root->ob_x = (UWORD) strip_x;
-	root->ob_y = (UWORD) strip_y;
-	root->ob_width = (UWORD) (prompt_x - strip_x + cols * cell_w);
-	root->ob_height = (UWORD) cell_h;
-
-	field->ob_x = (UWORD) (prompt_x - strip_x);
-	field->ob_y = 0;
-	field->ob_width = (UWORD) (cols * cell_w);
-	field->ob_height = (UWORD) cell_h;
-
-	irc_input_field_x = prompt_x;
-}
-
-/* the keys objc_edit can handle itself */
-static WORD
-irc_input_is_edit_key(UWORD key)
-{
-	UWORD ascii = key & 0x00ffU;
-	UWORD scan = key & 0xff00U;
-
-	if (ascii >= 0x20U && ascii <= 0x7eU)
-		return 1;	/* printable insertion */
-	if (ascii == 0x08U)
-		return 1;	/* backspace (0x0e08) */
-	if (scan == 0x5300U)
-		return 1;	/* delete */
-	if (scan == 0x4b00U)
-		return 1;	/* cursor left */
-	if (scan == 0x4d00U)
-		return 1;	/* cursor right */
-	return 0;
-}
-
-/* recount the model's length and cursor after objc_edit changed the buffer */
-static VOID
-irc_input_resync(VOID)
-{
-	UWORD length = 0;
-
-	while (irc_app.input[length])
-		length++;
-	irc_app.input_length = length;
-	if (irc_input_idx < 0)
-		irc_input_idx = 0;
-	if ((UWORD) irc_input_idx > length)
-		irc_input_idx = (WORD) length;
-	irc_app.input_cursor = (UWORD) irc_input_idx;
-}
-
-static WORD
-irc_aes_key(UWORD key)
-{
-	WORD result;
-
-	irc_input_ensure();
-	if (irc_input_is_edit_key(key)) {
-		/* objc_edit changes irc_app.input in place through te_ptext */
-		(void) objc_edit(irc_input_tree, IRC_IN_FIELD, (WORD) key,
-			&irc_input_idx, EDCHAR);
-		irc_input_resync();
-		irc_app.dirty |= GEM_IRC_APP_DIRTY_INPUT;
-		return GEM_IRC_APP_KEY_HANDLED;
-	}
-	/* submit, close, scroll, history, and line kills stay with the model */
-	result = gem_irc_app_key(&irc_app, key, irc_visible_rows());
-	irc_input_idx = (WORD) irc_app.input_cursor;
-	return result;
-}
-
-/* place the caret from a work-area click, objc_find does the hit-test */
-static VOID
-irc_aes_click(WORD mouse_x, WORD mouse_y)
-{
-	WORD hit;
-	WORD relative;
-	WORD column;
-
-	irc_input_ensure();
-	hit = objc_find(irc_input_tree, ROOT, MAX_DEPTH, mouse_x, mouse_y);
-	if (hit != IRC_IN_FIELD)
-		return;
-	relative = mouse_x - irc_input_field_x;
-	column = 0;
-	while (relative >= irc_character_width
-		&& column < (WORD) irc_app.input_length) {
-		relative -= irc_character_width;
-		column++;
-	}
-	irc_input_idx = column;
-	irc_app.input_cursor = (UWORD) column;
-	irc_app.dirty |= GEM_IRC_APP_DIRTY_INPUT;
-}
-#endif				/* IRC_AES_INPUT */
-
-/*
- * toolbar, one G_BUTTON per open conversation plus four action buttons
- * under a transparent G_IBOX root that spans the work area, so one tree
- * and one draw cover both
- */
-enum {
-	IRC_TB_ROOT = 0,
-	IRC_TB_TAB0,
-	IRC_TB_TAB1,
-	IRC_TB_TAB2,
-	IRC_TB_TAB3,
-	IRC_TB_TAB4,
-	IRC_TB_SEND,
-	IRC_TB_NAMES,
-	IRC_TB_PART,
-	IRC_TB_CLOSE,
-	IRC_TB_COUNT
-};
-
-#define IRC_TB_TAB_SLOTS  GEM_IRC_APP_BUFFERS	/* one button per buffer slot */
-#define IRC_TB_LABEL_MAX  16
-
-static OBJECT irc_tb_tree[IRC_TB_COUNT] __attribute__((aligned(2)));
-static BYTE irc_tb_label[IRC_TB_TAB_SLOTS][IRC_TB_LABEL_MAX + 1];
-static BYTE irc_tb_send[] = " Send ";
-static BYTE irc_tb_names[] = " Names ";
-static BYTE irc_tb_part[] = " Part ";
-static BYTE irc_tb_close[] = " Close ";
-static WORD irc_tb_ready;
-
-/* pixel width of a NUL-terminated label */
-static WORD
-irc_tb_text_px(const BYTE *text)
-{
-	WORD width;
-
-	width = 0;
-	while (*text++)
-		width += irc_character_width;
-	return width;
-}
-
-static VOID
-irc_tb_action(WORD index, WORD next, BYTE *label)
-{
-	OBJECT *object = &irc_tb_tree[index];
-
-	object->ob_next = next;
-	object->ob_head = NIL;
-	object->ob_tail = NIL;
-	object->ob_type = G_BUTTON;
-	object->ob_flags = SELECTABLE | EXIT;
-	object->ob_state = NORMAL;
-	object->ob_spec = gem_near_pointer_words(label);
-	object->ob_x = 0;
-	object->ob_y = 0;
-	object->ob_width = 0;
-	object->ob_height = 0;
-}
-
-/* build the fixed sibling chain once, geometry is refreshed on every draw */
-static VOID
-irc_tb_build(VOID)
-{
-	OBJECT *root = &irc_tb_tree[IRC_TB_ROOT];
-	OBJECT *tab;
-	WORD index;
-
-	root->ob_next = NIL;
-	root->ob_head = IRC_TB_TAB0;
-	root->ob_tail = IRC_TB_CLOSE;
-	root->ob_type = G_IBOX;	/* transparent container, no paint */
-	root->ob_flags = NONE;
-	root->ob_state = NORMAL;
-	root->ob_spec.lo = 0;
-	root->ob_spec.hi = 0;
-	root->ob_x = 0;
-	root->ob_y = 0;
-	root->ob_width = 0;
-	root->ob_height = 0;
-
-	index = 0;
-	while (index < IRC_TB_TAB_SLOTS) {
-		tab = &irc_tb_tree[IRC_TB_TAB0 + index];
-		irc_tb_label[index][0] = '\0';
-		tab->ob_next = IRC_TB_TAB0 + index + 1;	/* last tab -> IRC_TB_SEND */
-		tab->ob_head = NIL;
-		tab->ob_tail = NIL;
-		tab->ob_type = G_BUTTON;
-		tab->ob_flags = SELECTABLE | EXIT | HIDETREE;	/* hidden until used */
-		tab->ob_state = NORMAL;
-		tab->ob_spec = gem_near_pointer_words(irc_tb_label[index]);
-		tab->ob_x = 0;
-		tab->ob_y = 0;
-		tab->ob_width = 0;
-		tab->ob_height = 0;
-		index++;
-	}
-
-	irc_tb_action(IRC_TB_SEND, IRC_TB_NAMES, irc_tb_send);
-	irc_tb_action(IRC_TB_NAMES, IRC_TB_PART, irc_tb_names);
-	irc_tb_action(IRC_TB_PART, IRC_TB_CLOSE, irc_tb_part);
-	irc_tb_action(IRC_TB_CLOSE, IRC_TB_ROOT, irc_tb_close);
-	irc_tb_tree[IRC_TB_CLOSE].ob_flags |= LASTOB;
-	irc_tb_ready = 1;
-}
-
-static VOID
-irc_tb_ensure(VOID)
-{
-	if (!irc_tb_ready)
-		irc_tb_build();
-}
-
-/* copy a tab label, star in front of an unread private buffer */
-static VOID
-irc_tb_set_label(WORD slot, const char *name, WORD activity)
-{
-	BYTE *destination = irc_tb_label[slot];
-	WORD length = 0;
-
-	if (activity)
-		destination[length++] = '*';
-	while (*name && length < IRC_TB_LABEL_MAX)
-		destination[length++] = (BYTE) *name++;
-	destination[length] = '\0';
-}
-
-static VOID
-irc_tb_place(WORD index, WORD x, WORD y, WORD width, WORD height, WORD state)
-{
-	OBJECT *object = &irc_tb_tree[index];
-
-	object->ob_x = (UWORD) x;
-	object->ob_y = (UWORD) y;
-	object->ob_width = (UWORD) width;
-	object->ob_height = (UWORD) height;
-	object->ob_state = state;
-	object->ob_flags &= ~HIDETREE;
-}
-
-/*
- * refresh tab and button geometry, object coords are relative to the
- * root, pinned to the work origin, tabs past the open buffer count or
- * below the editor get HIDETREE
- */
-static VOID
-irc_tb_layout(VOID)
-{
-	OBJECT *root = &irc_tb_tree[IRC_TB_ROOT];
-	OBJECT *tab;
-	WORD topic_bottom;
-	WORD input_top;
-	WORD toolbar_top;
-	WORD tab_height;
-	WORD tab_y;
-	WORD button_y;
-	WORD button_height;
-	WORD button_x;
-	WORD button_width;
-	WORD count;
-	WORD active;
-	WORD index;
-
-	irc_tb_ensure();
-	topic_bottom = irc_work.g_y + irc_character_height + IRC_TOPIC_PADDING;
-	input_top = irc_input_top_y();
-	toolbar_top = irc_toolbar_top_y();
-	tab_height = irc_character_height + 2;
-	tab_y = topic_bottom + irc_character_height - irc_work.g_y;
-	count = (WORD) gem_irc_app_buffer_count(&irc_app);
-	active = (WORD) gem_irc_app_active_index(&irc_app);
-
-	index = 0;
-	while (index < IRC_TB_TAB_SLOTS) {
-		tab = &irc_tb_tree[IRC_TB_TAB0 + index];
-		if (index < count
-			&& irc_work.g_y + tab_y + tab_height < input_top) {
-			irc_tb_set_label(index,
-				gem_irc_app_buffer_label(&irc_app,
-					(GEM_IRC_UWORD) index),
-				gem_irc_app_buffer_activity(&irc_app,
-					(GEM_IRC_UWORD)
-					index));
-			irc_tb_place(IRC_TB_TAB0 + index, 2, tab_y,
-				IRC_SIDE_WIDTH - 4, tab_height,
-				index == active ? SELECTED : NORMAL);
-			tab_y += tab_height;
-		} else
-			tab->ob_flags |= HIDETREE;
-		index++;
-	}
-
-	button_y = toolbar_top - irc_work.g_y + 1;
-	button_height = irc_character_height + 2;
-	button_x = 4;
-	button_width = irc_tb_text_px(irc_tb_send) + 8;
-	irc_tb_place(IRC_TB_SEND, button_x, button_y, button_width,
-		button_height, NORMAL);
-	button_x += button_width + 4;
-	button_width = irc_tb_text_px(irc_tb_names) + 8;
-	irc_tb_place(IRC_TB_NAMES, button_x, button_y, button_width,
-		button_height, NORMAL);
-	button_x += button_width + 4;
-	button_width = irc_tb_text_px(irc_tb_part) + 8;
-	irc_tb_place(IRC_TB_PART, button_x, button_y, button_width,
-		button_height, NORMAL);
-	button_x += button_width + 4;
-	button_width = irc_tb_text_px(irc_tb_close) + 8;
-	irc_tb_place(IRC_TB_CLOSE, button_x, button_y, button_width,
-		button_height, NORMAL);
-
-	root->ob_x = (UWORD) irc_work.g_x;
-	root->ob_y = (UWORD) irc_work.g_y;
-	root->ob_width = (UWORD) irc_work.g_w;
-	root->ob_height = (UWORD) irc_work.g_h;
-}
-
-static VOID
-irc_tb_draw(VOID)
-{
-	irc_tb_layout();
-	objc_draw(irc_tb_tree, ROOT, MAX_DEPTH, irc_work.g_x, irc_work.g_y,
-		irc_work.g_w, irc_work.g_h);
-}
-
-/*
- * route one left-button click through objc_find, a miss is left for the
- * caller (the AES input field) to take
- */
-static WORD
-irc_tb_click(WORD mouse_x, WORD mouse_y)
-{
-	WORD hit;
-	WORD slot;
-
-	irc_tb_ensure();
-	hit = objc_find(irc_tb_tree, ROOT, MAX_DEPTH, mouse_x, mouse_y);
-	if (hit < IRC_TB_TAB0)
-		return 0;
-	if (hit <= IRC_TB_TAB4) {
-		slot = hit - IRC_TB_TAB0;
-		if ((GEM_IRC_UWORD) slot < gem_irc_app_buffer_count(&irc_app))
-			gem_irc_app_switch(&irc_app, (GEM_IRC_UWORD) slot);
-		return 1;
-	}
-	switch (hit) {
-	case IRC_TB_SEND:
-		(void) gem_irc_app_submit(&irc_app);
-		break;
-	case IRC_TB_NAMES:
-		(void) gem_irc_app_names(&irc_app);
-		break;
-	case IRC_TB_PART:
-		(void) gem_irc_app_part_active(&irc_app);
-		break;
-	case IRC_TB_CLOSE:
-		(void) gem_irc_app_close_buffer(&irc_app,
-			gem_irc_app_active_index(&irc_app));
-		break;
-	default:
-		return 0;
-	}
-	return 1;
-}
-
-/*
- * VDI text has no right-edge argument, so copy only the visible columns
- * into a scratch line before drawing
- */
-static VOID
-irc_draw_limited(WORD x, WORD y, const char *text, UWORD columns)
-{
-	UWORD length;
-
-	if (!text || !columns)
-		return;
-	x = (WORD) (((UWORD) x + 7U) & 0xfff8U);
-	if (columns >= IRC_DRAW_TEXT_SIZE)
-		columns = IRC_DRAW_TEXT_SIZE - 1U;
-	length = 0;
-	while (text[length] && length < columns) {
-		irc_draw_text[length] = (BYTE) text[length];
-		length++;
-	}
-	irc_draw_text[length] = '\0';
-	v_gtext(irc_vdi, x, y, irc_draw_text);
+	menu_x[IRC_MENU_COUNT] = x;
+	gem_irc_app_set_display_columns(&irc_app, (GEM_IRC_UWORD) columns);
+	/* clip to the work area */
+	xy[0] = wkx;
+	xy[1] = wky;
+	xy[2] = wkx + wkw - 1;
+	xy[3] = wky + wkh - 1;
+	vs_clip(irc_vdi, TRUE, xy);
+	shown_active = -1;
 }
 
 static WORD
@@ -947,255 +374,759 @@ irc_line_color(UBYTE kind)
 		return RED;
 	if (kind == GEM_IRC_APP_LINE_ACTION)
 		return GREEN;
-	if (kind == GEM_IRC_APP_LINE_NOTICE)
-		return BLUE;
-	if (kind == GEM_IRC_APP_LINE_STATUS)
+	if (kind == GEM_IRC_APP_LINE_NOTICE || kind == GEM_IRC_APP_LINE_STATUS)
 		return BLUE;
 	return BLACK;
 }
 
-/* draw the whole work area, the active VDI clip limits what really lands */
 static VOID
-irc_draw_content(VOID)
+irc_vdi_fill(WORD x, WORD y, WORD width, WORD height, WORD color)
 {
-	const GEM_IRC_APP_LINE *line;
-	const char *input;
-	const char *target;
-	const char *topic;
-	const char *nick;
-	GEM_IRC_APP_NICK *nick_slot;
-	UWORD rows;
-	UWORD count;
-	UWORD row;
-	UWORD columns;
-	UWORD pane_columns;
-	UWORD nick_count;
-	UWORD cursor;
-	UWORD first;
-	/* volatile stops gcc turning the repeated add into a MUL */
-	volatile UWORD shown_cursor;
-	WORD x;
-	WORD y;
-	WORD left_edge;
-	WORD right_edge;
-	WORD input_top;
-	WORD topic_bottom;
-	WORD center_width;
 	WORD xy[4];
 
-	irc_fill(irc_work.g_x, irc_work.g_y, irc_work.g_w, irc_work.g_h, WHITE);
-	left_edge = irc_work.g_x + IRC_SIDE_WIDTH;
-	right_edge = irc_work.g_x + irc_work.g_w - IRC_SIDE_WIDTH;
-	input_top = irc_input_top_y();
-	topic_bottom = irc_work.g_y + irc_character_height + IRC_TOPIC_PADDING;
-	center_width =
-		right_edge - left_edge - IRC_PANE_PADDING - IRC_PANE_PADDING;
-
-	/* central transcript, the newest rows clipped to the center pane */
-	rows = irc_visible_rows();
-	count = gem_irc_app_visible_count(&irc_app, rows);
-	x = left_edge + IRC_PANE_PADDING;
-	y = topic_bottom + irc_character_height;
-	columns = irc_transcript_columns();
-	row = 0;
-	while (row < count) {
-		line = gem_irc_app_visible_line(&irc_app, row, rows);
-		if (line) {
-			vst_color(irc_vdi, irc_line_color(line->kind));
-			irc_draw_limited(x, y, line->text, columns);
-		}
-		y += irc_character_height;
-		row++;
-	}
-
-	/* blue pane headers */
-	irc_fill(irc_work.g_x, irc_work.g_y, irc_work.g_w,
-		irc_character_height + IRC_TOPIC_PADDING, BLUE);
-
-	pane_columns = irc_text_columns(IRC_SIDE_WIDTH
-		- IRC_PANE_PADDING - IRC_PANE_PADDING, GEM_IRC_NICK_SIZE - 1U);
-	vst_color(irc_vdi, WHITE);
-	v_gtext(irc_vdi, irc_work.g_x + IRC_PANE_PADDING,
-		irc_work.g_y + irc_character_height, (BYTE *) "CHATS");
-	v_gtext(irc_vdi, right_edge + IRC_PANE_PADDING,
-		irc_work.g_y + irc_character_height, (BYTE *) "USERS");
-
-	/* the left pane's tabs are G_BUTTON objects drawn by irc_tb_draw() below */
-
-	/* the right roster only applies while a channel buffer is active */
-	if (gem_irc_app_active_kind(&irc_app) == GEM_IRC_APP_BUFFER_CHANNEL) {
-		nick_count = (UWORD) irc_app.nick_count;
-		nick_slot = irc_app.nicks;
-		y = topic_bottom + irc_character_height;
-		row = 0;
-		while (row < nick_count && y < input_top - 2) {
-			nick = nick_slot->text;
-			irc_draw_limited(right_edge + IRC_PANE_PADDING, y, nick,
-				pane_columns);
-			nick_slot++;
-			y += irc_character_height;
-			row++;
-		}
-		if (irc_app.nick_overflow)
-			irc_draw_limited(right_edge + IRC_PANE_PADDING,
-				input_top - 2, "+ more", pane_columns);
-	}
-
-	target = gem_irc_app_target(&irc_app);
-	if (!target || !*target)
-		target = (const char *) irc_channel;
-
-	/* topic/status strip, the saved topic if any else the target */
-	vst_color(irc_vdi, WHITE);
-	topic = gem_irc_app_topic(&irc_app);
-	if (!topic || !*topic)
-		topic = target;
-	columns = irc_text_columns(center_width - 88,
-		GEM_IRC_APP_DISPLAY_SIZE - 1U);
-	irc_draw_limited(left_edge + IRC_PANE_PADDING,
-		irc_work.g_y + irc_character_height, topic, columns);
-	v_gtext(irc_vdi, right_edge - 80,
-		irc_work.g_y + irc_character_height,
-		(BYTE *) (irc_app.connected ? "Online" : "Connect"));
-
-	/* divider lines */
-	vsl_color(irc_vdi, BLACK);
-	xy[0] = left_edge;
-	xy[1] = irc_work.g_y;
-	xy[2] = left_edge;
-	xy[3] = input_top;
-	v_pline(irc_vdi, 2, xy);
-	xy[0] = right_edge;
-	xy[2] = right_edge;
-	v_pline(irc_vdi, 2, xy);
-	xy[0] = left_edge;
-	xy[1] = topic_bottom;
-	xy[2] = right_edge;
-	xy[3] = topic_bottom;
-	v_pline(irc_vdi, 2, xy);
-
-	/* full-width single-line editor across the bottom */
-	xy[0] = irc_work.g_x;
-	xy[1] = input_top;
-	xy[2] = irc_work.g_x + irc_work.g_w - 1;
-	xy[3] = input_top;
-	v_pline(irc_vdi, 2, xy);
-
-	y = input_top + irc_character_height + 2;
-	vst_color(irc_vdi, BLACK);
-	x = (WORD) (((UWORD) (irc_work.g_x + IRC_PANE_PADDING) + 7U) & 0xfff8U);
-	v_gtext(irc_vdi, x, y, (BYTE *) "> ");
-	x += irc_character_width;
-	x += irc_character_width;
-	columns =
-		irc_text_columns(irc_work.g_w - 12,
-		GEM_IRC_APP_INPUT_SIZE - 1U);
-	if (columns > 2U)
-		columns -= 2U;
-	else
-		columns = 1U;
-#if defined(IRC_AES_INPUT) && IRC_AES_INPUT
-	/* objc_draw paints the input line right of the "> " prompt */
-	irc_input_layout(irc_work.g_x, input_top + 1, x, (WORD) columns,
-		irc_character_width, irc_character_height + 2);
-	objc_draw(irc_input_tree, ROOT, MAX_DEPTH, irc_work.g_x, input_top + 1,
-		irc_work.g_w, irc_character_height + 3);
-	(void) cursor;
-	(void) first;
-	(void) input;
-	(void) shown_cursor;
-#else
-	cursor = gem_irc_app_input_cursor(&irc_app);
-	first = 0;
-	if (cursor >= columns)
-		first = cursor - columns + 1U;
-	input = gem_irc_app_input(&irc_app);
-	row = 0;
-	while (row < first && *input) {
-		input++;
-		row++;
-	}
-	irc_draw_limited(x, y, input, columns);
-	shown_cursor = cursor - first;
-	while (shown_cursor) {
-		x += irc_character_width;
-		shown_cursor--;
-	}
-	xy[0] = x;
-	xy[1] = input_top + 3;
-	xy[2] = x;
-	xy[3] = input_top + irc_character_height + 2;
-	v_pline(irc_vdi, 2, xy);
-#endif
-
-	/* bottom toolbar, a separator line then the action buttons */
-	{
-		WORD toolbar_top = irc_toolbar_top_y();
-
-		vsl_color(irc_vdi, BLACK);
-		xy[0] = irc_work.g_x;
-		xy[1] = toolbar_top;
-		xy[2] = irc_work.g_x + irc_work.g_w - 1;
-		xy[3] = toolbar_top;
-		v_pline(irc_vdi, 2, xy);
-	}
-	irc_tb_draw();
-}
-
-static VOID
-irc_redraw(VOID)
-{
-	GRECT visible;
-	GRECT clipped;
-	WORD clip[4];
-
-	if (irc_window < 0)
+	if (width <= 0 || height <= 0)
 		return;
-	wind_get(irc_window, WF_FIRSTXYWH, &visible.g_x, &visible.g_y,
-		&visible.g_w, &visible.g_h);
-	while (visible.g_w > 0 && visible.g_h > 0) {
-		clipped = visible;
-		/* AES visible rectangles already sit inside the current work area */
-		if (rc_intersect(&irc_redraw_pending, &clipped)) {
-			clip[0] = clipped.g_x;
-			clip[1] = clipped.g_y;
-			clip[2] = clipped.g_x + clipped.g_w - 1;
-			clip[3] = clipped.g_y + clipped.g_h - 1;
-			vs_clip(irc_vdi, TRUE, clip);
-			irc_draw_content();
-		}
-		wind_get(irc_window, WF_NEXTXYWH, &visible.g_x, &visible.g_y,
-			&visible.g_w, &visible.g_h);
+	xy[0] = x;
+	xy[1] = y;
+	xy[2] = x + width - 1;
+	xy[3] = y + height - 1;
+	(void) vsf_interior(irc_vdi, FIS_SOLID);
+	(void) vsf_color(irc_vdi, color);
+	(void) vr_recfl(irc_vdi, xy);
+}
+
+static VOID
+irc_vdi_line(WORD x1, WORD y1, WORD x2, WORD y2, WORD color)
+{
+	WORD xy[4];
+
+	xy[0] = x1;
+	xy[1] = y1;
+	xy[2] = x2;
+	xy[3] = y2;
+	(void) vsl_color(irc_vdi, color);
+	(void) v_pline(irc_vdi, 2, xy);
+}
+
+static VOID
+irc_vdi_copy(WORD x, WORD y, WORD width, WORD height, WORD to_x, WORD to_y)
+{
+	static MFDB screen;
+	WORD xy[8];
+
+	if (width <= 0 || height <= 0)
+		return;
+	xy[0] = x;
+	xy[1] = y;
+	xy[2] = x + width - 1;
+	xy[3] = y + height - 1;
+	xy[4] = to_x;
+	xy[5] = to_y;
+	xy[6] = to_x + width - 1;
+	xy[7] = to_y + height - 1;
+	(void) vro_cpyfm(irc_vdi, S_ONLY, xy, &screen, &screen);
+}
+
+static VOID
+irc_vdi_text(WORD x, WORD y, WORD color, WORD effects, const char *text,
+	WORD length)
+{
+	static BYTE buffer[IRC_DRAW_TEXT_BYTES + 1U];
+	WORD index;
+
+	if (!text || length <= 0)
+		return;
+	if (length > IRC_DRAW_TEXT_BYTES)
+		length = IRC_DRAW_TEXT_BYTES;
+	index = 0;
+	while (index < length) {
+		buffer[index] = (BYTE) text[index];
+		index++;
 	}
-	vs_clip(irc_vdi, FALSE, (WORD *) 0);
+	buffer[index] = 0;
+	(void) vst_color(irc_vdi, color);
+	(void) vst_effects(irc_vdi, effects);
+	(void) v_gtext(irc_vdi, x, y, buffer);
+}
+
+/* text clipped to n columns */
+static VOID
+irc_text(WORD x, WORD y, WORD color, const char *s, WORD n)
+{
+	WORD length = 0;
+
+	while (length < n && s[length])
+		length++;
+	irc_vdi_text(x, y, color, 0, s, length);
 }
 
 static VOID
-irc_update_work(VOID)
+irc_draw_menu_bar(VOID)
 {
-	wind_get(irc_window, WF_WXYWH, &irc_work.g_x, &irc_work.g_y,
-		&irc_work.g_w, &irc_work.g_h);
+	WORD index, active;
+
+	irc_vdi_fill(wkx, menu_y, wkw, menu_h, WHITE);
+	for (index = 0; index < (WORD) IRC_MENU_COUNT; index++) {
+		active = irc_menu == (UBYTE) (index + 1);
+		if (active)
+			irc_vdi_fill(menu_x[index], menu_y,
+				menu_x[index + 1] - menu_x[index], menu_h, BLACK);
+		irc_text(menu_x[index] + cw, menu_y + 2,
+			active ? WHITE : BLACK, irc_menus[index].label, 12);
+	}
+	irc_vdi_line(wkx, menu_y + menu_h - 1, wkx + wkw - 1,
+		menu_y + menu_h - 1, BLACK);
 }
 
 static VOID
-irc_geometry(const WORD *message)
+irc_draw_menu_popup(VOID)
 {
+	const IRC_MENU_DESC *menu;
+	const IRC_MENU_ITEM *item;
+	WORD index;
 	WORD x;
 	WORD y;
 	WORD width;
 	WORD height;
 
-	x = message[4];
-	y = message[5];
-	width = message[6];
-	height = message[7];
-	if (width < IRC_WINDOW_MIN_WIDTH)
-		width = IRC_WINDOW_MIN_WIDTH;
-	if (height < IRC_WINDOW_MIN_HEIGHT)
-		height = IRC_WINDOW_MIN_HEIGHT;
-	wind_set(irc_window, WF_CXYWH, x, y, width, height);
-	irc_update_work();
-	gem_irc_app_set_display_columns(&irc_app, irc_transcript_columns());
+	if (!irc_menu || irc_menu > IRC_MENU_COUNT)
+		return;
+	menu = &irc_menus[irc_menu - 1U];
+	x = menu_x[irc_menu - 1U];
+	y = menu_y + menu_h;
+	width = ((WORD) menu->columns + 2) * cw;
+	height = (WORD) menu->count * (ch + 4) + 4;
+	irc_vdi_fill(x, y, width, height, WHITE);
+	irc_vdi_line(x, y, x + width - 1, y, BLACK);
+	irc_vdi_line(x, y, x, y + height - 1, BLACK);
+	irc_vdi_line(x + width - 1, y, x + width - 1, y + height - 1, BLACK);
+	irc_vdi_line(x, y + height - 1, x + width - 1, y + height - 1, BLACK);
+	y += 2;
+	item = menu->items;
+	for (index = 0; index < (WORD) menu->count; index++, item++) {
+		irc_text(x + cw, y + 2, BLACK, item->label, menu->columns);
+		y += ch + 4;
+	}
+}
+
+/* server tree with channel and query children */
+static VOID
+irc_draw_tree(VOID)
+{
+	const GEM_IRC_APP_BUFFER *buffer;
+	const char *name;
+	WORD i, y, x, color, close_x, close_y;
+
+	irc_vdi_fill(wkx, topic_y, tree_right - wkx, wky + wkh - topic_y, WHITE);
+	y = topic_y + 2;
+	for (i = 0; i < (WORD) GEM_IRC_APP_BUFFERS; i++) {
+		tree_row[i] = -1;
+		if (i >= irc_app.buffer_count)
+			continue;
+		buffer = irc_app.order[i];
+		if (buffer->kind == GEM_IRC_APP_BUFFER_FREE)
+			continue;
+		tree_row[i] = y;
+		color = i == irc_app.active ? WHITE : BLACK;
+		if (i == irc_app.active)
+			irc_vdi_fill(tree_x, y - 1, tree_right - tree_x - 2, ch + 2, BLACK);
+		x = tree_x + (i ? 16 : 0);
+		if (i) {
+			irc_vdi_line(tree_x + 4, y, tree_x + 4, y + ch / 2, color);
+			irc_vdi_line(tree_x + 4, y + ch / 2, tree_x + 10, y + ch / 2, color);
+		}
+		name = i ? buffer->name : (const char *) irc_server;
+		close_x = tree_right - GEM_IRC_LAYOUT_CLOSE_WIDTH;
+		irc_text(x, y, color, name,
+			irc_fit(x, close_x - 5, tree_columns));
+		if (buffer->activity)
+			irc_vdi_fill(close_x - 4, y + 2, 3, 3, color);
+		if (i) {
+			close_y = y + (ch - 5) / 2;
+			irc_vdi_line(close_x + 2, close_y, close_x + 6, close_y + 4, color);
+			irc_vdi_line(close_x + 6, close_y, close_x + 2, close_y + 4, color);
+		}
+		y += ch + 4;
+	}
+	name = irc_manual_offline ? "Offline" :
+		irc_app.protocol.registered ? "Online" : "Connecting";
+	irc_text(tree_x, input_y + 3, BLACK, name, tree_columns);
+}
+
+/* topic above the transcript */
+static VOID
+irc_draw_topic(VOID)
+{
+	const char *topic = gem_irc_app_topic(&irc_app);
+
+	if (!topic || !*topic)
+		topic = gem_irc_app_target(&irc_app);
+	if (!topic || !*topic)
+		topic = (const char *) irc_server;
+	irc_vdi_fill(tree_right + 1, topic_y, pane_x - tree_right - 7, topic_h, WHITE);
+	irc_text(text_x, topic_y + 2, BLACK, topic, columns);
+	irc_vdi_line(tree_right + 1, topic_y + topic_h, pane_x - 6,
+		topic_y + topic_h, BLACK);
+}
+
+/* draw rows first through last minus one */
+static VOID
+irc_draw_rows(WORD first, WORD last)
+{
+	const GEM_IRC_APP_LINE *line;
+	WORD row;
+
+	irc_vdi_fill(text_x, body_y + first * ch, columns * cw, (last - first) * ch,
+		WHITE);
+	for (row = first; row < last; row++) {
+		line = gem_irc_app_visible_line(&irc_app, (GEM_IRC_UWORD) row,
+			(GEM_IRC_UWORD) rows);
+		if (line)
+			irc_text(text_x, body_y + row * ch,
+				irc_line_color(line->kind), line->text, columns);
+	}
+}
+
+/* scroll unchanged rows, then draw new rows */
+static VOID
+irc_draw_transcript(VOID)
+{
+	UWORD appended, count, scroll, before, after, added;
+	WORD shift;
+
+	appended = gem_irc_app_appended(&irc_app);
+	count = gem_irc_app_line_count(&irc_app);
+	scroll = gem_irc_app_scroll_offset(&irc_app);
+	added = appended - shown_appended;
+	before = shown_count < (UWORD) rows ? shown_count : (UWORD) rows;
+	after = count < (UWORD) rows ? count : (UWORD) rows;
+	if (shown_active == (WORD) gem_irc_app_active_index(&irc_app)
+		&& !scroll && !shown_scroll && added && added <= after
+		&& count >= shown_count) {
+		shift = (WORD) (added - (after - before));
+		if (shift > 0 && shift < rows)
+			irc_vdi_copy(text_x, body_y + shift * ch,
+				columns * cw, (rows - shift) * ch,
+				text_x, body_y);
+		if (shift < rows)
+			irc_draw_rows((WORD) (after - added), (WORD) after);
+		else
+			irc_draw_rows(0, rows);
+	} else
+		irc_draw_rows(0, rows);
+	shown_active = (WORD) gem_irc_app_active_index(&irc_app);
+	shown_appended = appended;
+	shown_count = count;
+	shown_scroll = scroll;
+}
+
+static VOID
+irc_draw_nicks(VOID)
+{
+	const GEM_IRC_APP_NICK *nick;
+	char prefix[2];
+	WORD row, limit, y, arrow_x, maximum, selected;
+	UWORD index;
+
+	irc_vdi_fill(pane_x - 4, topic_y, wkx + wkw - (pane_x - 4), input_y - topic_y,
+		WHITE);
+	if (gem_irc_app_active_kind(&irc_app) != GEM_IRC_APP_BUFFER_CHANNEL) {
+		irc_roster_scroll = 0;
+		return;
+	}
+	irc_text(pane_x, topic_y + 2, BLACK, "Users", pane_columns - 2);
+	arrow_x = wkx + wkw - 2 * cw - 2;
+	irc_vdi_line(arrow_x + 1, topic_y + ch, arrow_x + 4, topic_y + 3, BLACK);
+	irc_vdi_line(arrow_x + 4, topic_y + 3, arrow_x + 7, topic_y + ch, BLACK);
+	irc_vdi_line(arrow_x + cw + 1, topic_y + 3,
+		arrow_x + cw + 4, topic_y + ch, BLACK);
+	irc_vdi_line(arrow_x + cw + 4, topic_y + ch,
+		arrow_x + cw + 7, topic_y + 3, BLACK);
+	limit = rows - (irc_app.nick_overflow ? 1 : 0);
+	if (limit < 1)
+		limit = 1;
+	maximum = (WORD) irc_app.nick_count - limit;
+	if (maximum < 0)
+		maximum = 0;
+	if ((WORD) irc_roster_scroll > maximum)
+		irc_roster_scroll = (UBYTE) maximum;
+	y = body_y;
+	index = irc_roster_scroll;
+	nick = irc_app.nicks + index;
+	for (row = 0; row < limit
+		&& row + (WORD) irc_roster_scroll < (WORD) irc_app.nick_count;
+		row++, nick++) {
+		selected = irc_selected_nick[0]
+			&& gem_irc_equal((const char *) irc_selected_nick, nick->text);
+		if (selected)
+			irc_vdi_fill(pane_x - 2, y, wkx + wkw - pane_x, ch, BLACK);
+		prefix[0] = nick->prefix ? nick->prefix : ' ';
+		prefix[1] = '\0';
+		irc_text(pane_x, y, selected ? WHITE : BLACK, prefix, 1);
+		irc_text(pane_x + cw, y, selected ? WHITE : BLACK, nick->text,
+			pane_columns - 1);
+		y += ch;
+	}
+	if (irc_app.nick_overflow)
+		irc_text(pane_x, y, BLACK, "+ more", pane_columns);
+}
+
+/* prompt, visible input and caret */
+static VOID
+irc_draw_input(VOID)
+{
+	const char *input = gem_irc_app_input(&irc_app);
+	UWORD cursor = gem_irc_app_input_cursor(&irc_app);
+	UWORD first = 0;
+	WORD x = edit_x;
+	WORD y = input_y + 3;
+
+	if (cursor >= (UWORD) input_columns)
+		first = cursor - (UWORD) input_columns + 1U;
+	irc_vdi_fill(text_x, input_y + 1, wkx + wkw - text_x,
+		wky + wkh - input_y - 1, WHITE);
+	irc_text(text_x, y, BLACK, gem_irc_current_nick(&irc_app.protocol), 8);
+	irc_text(x, y, BLACK, input + first, input_columns);
+	x += (WORD) (cursor - first) * cw;
+	irc_vdi_line(x, y, x, y + ch - 1, BLACK);
+}
+
+static VOID
+irc_draw_rules(VOID)
+{
+	irc_vdi_line(tree_right, topic_y, tree_right, wky + wkh - 1, BLACK);
+	irc_vdi_line(pane_x - 6, topic_y, pane_x - 6, input_y - 1, BLACK);
+	irc_vdi_line(text_x, input_y, wkx + wkw - 1, input_y, BLACK);
+}
+
+/* draw the full window */
+static VOID
+irc_draw_all(VOID)
+{
+	irc_vdi_fill(wkx, wky, wkw, wkh, WHITE);
+	irc_draw_menu_bar();
+	irc_draw_tree();
+	irc_draw_topic();
+	shown_active = -1;
+	irc_draw_transcript();
+	irc_draw_nicks();
+	irc_draw_input();
+	irc_draw_rules();
+	irc_draw_menu_popup();
+}
+
+/* draw dirty regions, lock full redraws */
+static VOID
+irc_update(UWORD dirty, WORD all)
+{
+	if (!all && !dirty)
+		return;
+	if (all) {
+		wind_update(BEG_UPDATE);
+		irc_draw_all();
+		wind_update(END_UPDATE);
+		return;
+	}
+	{
+		if (dirty & IRC_UI_DIRTY_MENU)
+			irc_draw_menu_bar();
+		if (dirty & GEM_IRC_APP_DIRTY_TOPIC) {
+			irc_draw_topic();
+			irc_draw_tree();
+		} else if (dirty & GEM_IRC_APP_DIRTY_TABS)
+			irc_draw_tree();
+		if (dirty & GEM_IRC_APP_DIRTY_TRANSCRIPT)
+			irc_draw_transcript();
+		if (dirty & (GEM_IRC_APP_DIRTY_ROSTER | GEM_IRC_APP_DIRTY_TARGET)) {
+			irc_draw_nicks();
+		}
+		if (dirty & GEM_IRC_APP_DIRTY_INPUT)
+			irc_draw_input();
+		if (irc_menu)
+			irc_draw_menu_popup();
+	}
+}
+
+/* service the socket while a dialog is open */
+static WORD
+irc_dialog(const char *title, WORD count, const char *const *labels,
+	char values[4][IRC_DIALOG_TEXT_BYTES])
+{
+	static OBJECT tree[12];
+	static TEDINFO ted[4] __attribute__((aligned(2)));
+	static BYTE empty[] = "";
+	static BYTE valid[] = "X";
+	static BYTE accept[] = "OK";
+	static BYTE cancel[] = "Cancel";
+	WORD i, n, ok, last, field, next, keyout, edit_index, object, result;
+	WORD x, y, w, h, field_x, field_y, length, pressed;
+	UWORD events, mx, my, mb, ks, key, clicks;
+	OBJECT *entry;
+	TEDINFO *info;
+
+	ok = 2 + 2 * count;
+	last = ok + 1;
+	memset(tree, 0, sizeof(tree));
+	memset(ted, 0, sizeof(ted));
+	for (i = 0; i <= last; i++) {
+		entry = &tree[i];
+		entry->ob_next = i == last ? 0 : i + 1;
+		entry->ob_head = entry->ob_tail = NIL;
+		entry->ob_type = G_STRING;
+		entry->ob_x = 12;
+		entry->ob_width = 400;
+		entry->ob_height = ch + 4;
+	}
+	tree[0].ob_next = NIL;
+	tree[0].ob_head = 1;
+	tree[0].ob_tail = last;
+	tree[0].ob_type = G_BOX;
+	tree[0].ob_state = OUTLINED;
+	tree[0].ob_spec = gem_u32_words(0x1100, 0x0001);
+	tree[0].ob_width = 432;
+	tree[0].ob_height = (count + 3) * (ch + 10);
+	tree[1].ob_y = 8;
+	tree[1].ob_spec = gem_near_pointer_words(title);
+	for (i = 0, n = 2; i < count; i++, n += 2) {
+		tree[n].ob_y = (i + 1) * (ch + 10) + 4;
+		tree[n].ob_width = 80;
+		tree[n].ob_spec = gem_near_pointer_words(labels[i]);
+		entry = &tree[n + 1];
+		entry->ob_type = G_BOXTEXT;
+		entry->ob_flags = EDITABLE;
+		entry->ob_x = 96;
+		entry->ob_y = tree[n].ob_y;
+		entry->ob_width = 320;
+		info = &ted[i];
+		info->te_ptext = gem_near_pointer_words(values[i]);
+		info->te_ptmplt = gem_near_pointer_words(empty);
+		info->te_pvalid = gem_near_pointer_words(valid);
+		info->te_font = 3;
+		info->te_color = 0x1180;
+		info->te_thickness = 1;
+		info->te_txtlen = IRC_DIALOG_TEXT_BYTES;
+		info->te_tmplen = 1;
+		entry->ob_spec = gem_near_pointer_words(info);
+	}
+	tree[ok].ob_type = tree[last].ob_type = G_BUTTON;
+	tree[ok].ob_flags = SELECTABLE | DEFAULT | EXIT;
+	tree[last].ob_flags = SELECTABLE | EXIT | LASTOB;
+	tree[ok].ob_width = tree[last].ob_width = 80;
+	tree[ok].ob_x = 128;
+	tree[last].ob_x = 224;
+	tree[ok].ob_y = tree[last].ob_y = (count + 2) * (ch + 10);
+	tree[ok].ob_spec = gem_near_pointer_words(accept);
+	tree[last].ob_spec = gem_near_pointer_words(cancel);
+	form_center(tree, &x, &y, &w, &h);
+	form_dial(FMD_START, 0, 0, 0, 0, x, y, w, h);
+	objc_draw(tree, 0, MAX_DEPTH, x, y, w, h);
+	field = 3;
+	edit_index = 0;
+	pressed = FALSE;
+	object = NIL;
+	objc_edit(tree, field, 0, &edit_index, 1);
+	objc_change(tree, field, 0, x, y, w, h, HIGHLIGHTED, TRUE);
+	result = FALSE;
+	for (;;) {
+		events = evnt_multi_ds(MU_KEYBD | MU_BUTTON | MU_TIMER,
+			1, 1, !pressed, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			irc_message, IRC_TIMER_IDLE_MS, 0,
+			&mx, &my, &mb, &ks, &key, &clicks);
+		if (events & MU_TIMER)
+			irc_network_step();
+		next = field;
+		if (events & MU_KEYBD) {
+			if ((key & 0xffU) == 27U)
+				break;
+			if (!form_keybd(tree, field, 0, key, &next, &keyout)) {
+				result = next == ok;
+				break;
+			}
+			if (keyout)
+				objc_edit(tree, field, keyout, &edit_index, 2);
+		}
+		if (events & MU_BUTTON) {
+			pressed = (mb & 1U) != 0;
+			if (pressed) {
+				object = objc_find(tree, 0, MAX_DEPTH, mx, my);
+				if (object > 0 && object <= last &&
+				    !form_button(tree, object, clicks, &next)) {
+					result = (next & 0x7fff) == ok;
+					break;
+				}
+			}
+		}
+		if (next > 0 && next <= last && next != field &&
+		    (tree[next].ob_flags & EDITABLE)) {
+			objc_edit(tree, field, 0, &edit_index, 3);
+			objc_change(tree, field, 0, x, y, w, h, NORMAL, TRUE);
+			field = next;
+			objc_edit(tree, field, 0, &edit_index, 1);
+			objc_change(tree, field, 0, x, y, w, h, HIGHLIGHTED, TRUE);
+		}
+		if ((events & MU_BUTTON) && pressed && object == field) {
+			objc_offset(tree, field, &field_x, &field_y);
+			length = (WORD)strlen(values[(field - 3) / 2]);
+			edit_index = mx > (UWORD)field_x ?
+				(WORD)((mx - field_x) / cw) : 0;
+			if (edit_index > length)
+				edit_index = length;
+		}
+	}
+	objc_edit(tree, field, 0, &edit_index, 3);
+	form_dial(FMD_FINISH, 0, 0, 0, 0, x, y, w, h);
+	irc_damage_all = 1;
+	return result;
+}
+
+static BYTE irc_fields[4][IRC_DIALOG_TEXT_BYTES];
+
+static VOID
+irc_connect_dialog(VOID)
+{
+	static const char *const labels[] = { "Server", "Port", "Nickname", "Channel" };
+	UWORD port;
+
+	(void) irc_copy(irc_fields[0], sizeof(irc_fields[0]), irc_server);
+	snprintf(irc_fields[1], sizeof(irc_fields[1]), "%u", irc_port);
+	(void) irc_copy(irc_fields[2], sizeof(irc_fields[2]), irc_nick);
+	(void) irc_copy(irc_fields[3], sizeof(irc_fields[3]), irc_channel);
+	if (!irc_dialog("IRC connection", 4, labels, irc_fields))
+		return;
+	if (!irc_fields[0][0] || !irc_fields[2][0]
+		|| strlen(irc_fields[0]) >= sizeof(irc_server)
+		|| strlen(irc_fields[2]) >= sizeof(irc_nick)
+		|| strlen(irc_fields[3]) >= sizeof(irc_channel)
+		|| !irc_parse_port(irc_fields[1], &port)) {
+		form_alert(1, "[1][Enter a server, nickname|and port from 1 to 65535.][OK]");
+		return;
+	}
+	irc_user_disconnect();
+	(void) irc_copy(irc_server, sizeof(irc_server), irc_fields[0]);
+	(void) irc_copy(irc_nick, sizeof(irc_nick), irc_fields[2]);
+	(void) irc_copy(irc_channel, sizeof(irc_channel), irc_fields[3]);
+	(void) irc_copy((BYTE *) irc_app.protocol.nick,
+		sizeof(irc_app.protocol.nick), irc_nick);
+	irc_port = port;
+	irc_user_reconnect();
+}
+
+static VOID
+irc_command(const char *prefix, const char *argument, WORD submit)
+{
+	UWORD length;
+
+	length = 0;
+	while (*prefix && length + 1U < GEM_IRC_APP_INPUT_SIZE)
+		irc_ui_command[length++] = *prefix++;
+	if (argument)
+		while (*argument && length + 1U < GEM_IRC_APP_INPUT_SIZE)
+			irc_ui_command[length++] = *argument++;
+	if (!submit && argument && length + 1U < GEM_IRC_APP_INPUT_SIZE)
+		irc_ui_command[length++] = ' ';
+	irc_ui_command[length] = '\0';
+	if (gem_irc_app_set_input(&irc_app, (const char *) irc_ui_command)
+		== GEM_IRC_OK && submit) {
+		(void) gem_irc_app_submit(&irc_app);
+		irc_quiet_polls = 0;
+	}
+}
+
+static VOID
+irc_prompt(const char *label, const char *prefix, const char *initial)
+{
+	const char *labels[1];
+
+	labels[0] = label;
+	(void) irc_copy(irc_fields[0], sizeof(irc_fields[0]),
+		(const BYTE *) (initial ? initial : ""));
+	if (irc_dialog(label, 1, labels, irc_fields) && irc_fields[0][0])
+		irc_command(prefix, irc_fields[0], TRUE);
+}
+
+static VOID
+irc_action(UBYTE action)
+{
+	GEM_IRC_UWORD active;
+
+	active = gem_irc_app_active_index(&irc_app);
+	if (action == IRC_ACTION_CONNECT)
+		irc_connect_dialog();
+	else if (action == IRC_ACTION_NICK)
+		irc_prompt("Nickname", "/nick ", gem_irc_current_nick(&irc_app.protocol));
+	else if (action == IRC_ACTION_RECONNECT)
+		irc_user_reconnect();
+	else if (action == IRC_ACTION_DISCONNECT)
+		irc_user_disconnect();
+	else if (action == IRC_ACTION_QUIT)
+		(void) gem_irc_app_request_close(&irc_app, "Menu quit");
+	else if (action == IRC_ACTION_JOIN)
+		irc_prompt("Channel", "/join ", irc_channel);
+	else if (action == IRC_ACTION_PART) {
+		if (gem_irc_app_active_kind(&irc_app) == GEM_IRC_APP_BUFFER_PRIVATE)
+			(void) gem_irc_app_close_buffer(&irc_app, active);
+		else if (gem_irc_app_active_kind(&irc_app)
+			== GEM_IRC_APP_BUFFER_CHANNEL)
+			irc_command("/part", (const char *) 0, TRUE);
+	} else if (action == IRC_ACTION_TOPIC)
+		irc_prompt("Topic", "/topic ", gem_irc_app_topic(&irc_app));
+	else if (action == IRC_ACTION_NAMES)
+		irc_command("/names", (const char *) 0, TRUE);
+	else if (action == IRC_ACTION_CLEAR)
+		gem_irc_app_clear(&irc_app);
+	else if (action == IRC_ACTION_QUERY) {
+		if (irc_selected_nick[0])
+			(void) gem_irc_app_query(&irc_app,
+				(const char *) irc_selected_nick);
+		else
+			irc_prompt("Query", "/query ", "");
+	} else if (action == IRC_ACTION_MESSAGE)
+		irc_command("/msg ", irc_selected_nick[0]
+			? (const char *) irc_selected_nick : (const char *) 0, FALSE);
+	else if (action == IRC_ACTION_WHOIS)
+		irc_command("/whois ", irc_selected_nick[0]
+			? (const char *) irc_selected_nick : (const char *) 0,
+			irc_selected_nick[0] != '\0');
+	else if (action == IRC_ACTION_KICK)
+		irc_command("/kick ", irc_selected_nick[0]
+			? (const char *) irc_selected_nick : (const char *) 0, FALSE);
+	else if (action == IRC_ACTION_NEXT)
+		gem_irc_app_cycle(&irc_app, 1);
+	else if (action == IRC_ACTION_PREVIOUS)
+		gem_irc_app_cycle(&irc_app, -1);
+	else if (action == IRC_ACTION_CLOSE_TAB && active)
+		(void) gem_irc_app_close_buffer(&irc_app, active);
+	else if (action == IRC_ACTION_COMMANDS)
+		irc_command("/help", (const char *) 0, TRUE);
+	else if (action == IRC_ACTION_SHORTCUTS)
+		(void) form_alert(1, "[0][F1 commands; F2/F3 views|"
+			"Ctrl-N/P views; Ctrl-W close|"
+			"Tab completes nick; Up/Down history|"
+			"Ctrl-S connection; Ctrl-R retry|"
+			"PgUp/PgDn scroll; Ctrl-Q exit][OK]");
+	else if (action == IRC_ACTION_ABOUT)
+		(void) form_alert(1, "[0][Antler IRC Chat|Native GEM client|"
+			"Fixed memory and adaptive polling][OK]");
+	else if (action == IRC_ACTION_AWAY)
+		irc_prompt("Away", "/away ", "");
+	else if (action == IRC_ACTION_BACK)
+		irc_command("/away", (const char *) 0, TRUE);
+	else if (action == IRC_ACTION_OP || action == IRC_ACTION_DEOP
+		|| action == IRC_ACTION_VOICE || action == IRC_ACTION_DEVOICE) {
+		const char *command = action == IRC_ACTION_OP ? "/mode +o " :
+			action == IRC_ACTION_DEOP ? "/mode -o " :
+			action == IRC_ACTION_VOICE ? "/mode +v " : "/mode -v ";
+		irc_command(command, irc_selected_nick[0]
+			? (const char *) irc_selected_nick : (const char *) 0,
+			irc_selected_nick[0] != '\0');
+	}
+}
+
+/* hit test the menu, tree, roster and editor */
+static WORD
+irc_click(WORD mx, WORD my, WORD clicks)
+{
+	const IRC_MENU_DESC *menu;
+	WORD i;
+	WORD x;
+	WORD y;
+	WORD width;
+	WORD row;
+	UWORD cursor;
+	UWORD first;
+	UWORD index;
+
+	if (my >= menu_y && my < menu_y + menu_h) {
+		for (i = 0; i < (WORD) IRC_MENU_COUNT; i++)
+			if (mx >= menu_x[i] && mx < menu_x[i + 1]) {
+				irc_menu = irc_menu == (UBYTE) (i + 1)
+					? IRC_MENU_NONE : (UBYTE) (i + 1);
+				irc_pending |= IRC_UI_DIRTY_MENU;
+				return TRUE;
+			}
+	}
+	if (irc_menu) {
+		menu = &irc_menus[irc_menu - 1U];
+		x = menu_x[irc_menu - 1U];
+		y = menu_y + menu_h + 2;
+		width = ((WORD) menu->columns + 2) * cw;
+		if (mx >= x && mx < x + width && my >= y
+			&& my < y + (WORD) menu->count * (ch + 4)) {
+			row = (my - y) / (ch + 4);
+			irc_action(menu->items[row].action);
+		}
+		irc_menu = IRC_MENU_NONE;
+		irc_pending |= IRC_UI_DIRTY_MENU;
+		return TRUE;
+	}
+	if (mx >= tree_x && mx < tree_right && my >= topic_y && my < input_y) {
+		for (i = 0; i < (WORD) gem_irc_app_buffer_count(&irc_app); i++)
+			if (tree_row[i] >= 0 && my >= tree_row[i]
+				&& my < tree_row[i] + ch + 4) {
+				if (i && mx >= tree_right - GEM_IRC_LAYOUT_CLOSE_WIDTH)
+					(void) gem_irc_app_close_buffer(&irc_app, (GEM_IRC_UWORD) i);
+				else
+					gem_irc_app_switch(&irc_app, (GEM_IRC_UWORD) i);
+				irc_roster_scroll = 0;
+				irc_selected_nick[0] = '\0';
+				return FALSE;
+			}
+	}
+	if (mx >= text_x && mx < pane_x - 6
+		&& my >= topic_y && my < topic_y + topic_h
+		&& gem_irc_app_active_kind(&irc_app) == GEM_IRC_APP_BUFFER_CHANNEL) {
+		irc_action(IRC_ACTION_TOPIC);
+		return FALSE;
+	}
+	if (mx >= pane_x - 4 && my >= topic_y && my < input_y
+		&& gem_irc_app_active_kind(&irc_app) == GEM_IRC_APP_BUFFER_CHANNEL) {
+		if (my < body_y) {
+			x = wkx + wkw - 2 * cw - 2;
+			if (mx >= x && mx < x + cw && irc_roster_scroll)
+				irc_roster_scroll--;
+			else if (mx >= x + cw && mx < x + 2 * cw
+				&& irc_roster_scroll + 1U < irc_app.nick_count)
+				irc_roster_scroll++;
+			irc_app.dirty |= GEM_IRC_APP_DIRTY_ROSTER;
+			return FALSE;
+		}
+		row = (my - body_y) / ch;
+		index = (UWORD) row + irc_roster_scroll;
+		if (index < (UWORD) irc_app.nick_count) {
+			(void) irc_copy(irc_selected_nick, GEM_IRC_NICK_SIZE,
+				(const BYTE *) irc_app.nicks[index].text);
+			irc_app.dirty |= GEM_IRC_APP_DIRTY_ROSTER;
+			if (clicks > 1)
+				(void) gem_irc_app_query(&irc_app,
+					(const char *) irc_selected_nick);
+		}
+		return FALSE;
+	}
+	if (mx >= edit_x && my >= input_y && my < wky + wkh) {
+		cursor = gem_irc_app_input_cursor(&irc_app);
+		first = cursor >= (UWORD) input_columns
+			? cursor - (UWORD) input_columns + 1U : 0;
+		if (mx <= edit_x)
+			cursor = first;
+		else
+			cursor = first + (UWORD) ((mx - edit_x) / cw);
+		gem_irc_app_set_cursor(&irc_app, cursor);
+	}
+	return FALSE;
+}
+
+static VOID
+irc_geometry(const WORD *message)
+{
+	WORD width = message[6];
+	WORD height = message[7];
+
+	if (width < GEM_IRC_LAYOUT_MIN_WIDTH)
+		width = GEM_IRC_LAYOUT_MIN_WIDTH;
+	if (height < GEM_IRC_LAYOUT_MIN_HEIGHT)
+		height = GEM_IRC_LAYOUT_MIN_HEIGHT;
+	wind_set(irc_window, WF_CXYWH, message[4], message[5], width, height);
+	irc_layout();
 	irc_was_full = FALSE;
 }
 
@@ -1217,113 +1148,87 @@ irc_full(VOID)
 	}
 	wind_set(irc_window, WF_CXYWH, target.g_x, target.g_y,
 		target.g_w, target.g_h);
-	irc_update_work();
-	gem_irc_app_set_display_columns(&irc_app, irc_transcript_columns());
+	irc_layout();
 }
 
-static VOID
+/* true when the window needs a full redraw */
+static WORD
 irc_handle_message(WORD *message)
 {
-	UWORD rows;
-
 	if (message[3] != irc_window)
-		return;
+		return FALSE;
 	switch (message[0]) {
 	case WM_REDRAW:
-		/* AES puts the damage GRECT in message words four through seven */
-		irc_queue_redraw((GRECT *) &message[4]);
-		break;
+		return TRUE;
 	case WM_TOPPED:
 	case WM_NEWTOP:
 		wind_set(irc_window, WF_TOP, irc_window, 0, 0, 0);
-		break;
+		return FALSE;
 	case WM_CLOSED:
-		(void) gem_irc_app_request_close(&irc_app, "Window closed");
-		break;
+		gem_irc_app_request_close(&irc_app, "Window closed");
+		return FALSE;
 	case WM_FULLED:
 		irc_full();
-		irc_queue_full_redraw();
-		break;
+		return TRUE;
 	case WM_MOVED:
 	case WM_SIZED:
 		irc_geometry(message);
-		irc_queue_full_redraw();
-		break;
+		return TRUE;
 	case WM_ARROWED:
-		rows = irc_visible_rows();
 		if (message[4] == WA_UPPAGE)
-			gem_irc_app_scroll_up(&irc_app, rows, rows);
+			gem_irc_app_scroll_up(&irc_app, (GEM_IRC_UWORD) rows,
+				(GEM_IRC_UWORD) rows);
 		else if (message[4] == WA_DNPAGE)
-			gem_irc_app_scroll_down(&irc_app, rows, rows);
+			gem_irc_app_scroll_down(&irc_app, (GEM_IRC_UWORD) rows,
+				(GEM_IRC_UWORD) rows);
 		else if (message[4] == WA_UPLINE)
-			gem_irc_app_scroll_up(&irc_app, 1U, rows);
+			gem_irc_app_scroll_up(&irc_app, 1U, (GEM_IRC_UWORD) rows);
 		else if (message[4] == WA_DNLINE)
-			gem_irc_app_scroll_down(&irc_app, 1U, rows);
-		break;
+			gem_irc_app_scroll_down(&irc_app, 1U,
+				(GEM_IRC_UWORD) rows);
+		return FALSE;
 	}
+	return FALSE;
 }
-
-/* the bindings reach /bin/gem over the two pipes, install before appl_init() */
-extern WORD gem_client_install(VOID);
 
 static WORD
 irc_open_window(VOID)
 {
-	WORD index;
+	WORD work_in[11];
+	WORD index, bw, bh, hor, ver;
 	GRECT border;
 	GEM_U32_WORDS title;
 
-	if (!gem_client_install())
+	if (!aescheck())
 		return FALSE;
-	(void) chdir("/lib/gemsys");
+	chdir("/lib/gemsys");
 	irc_application = appl_init(NULL);
 	if (irc_application < 0)
 		return FALSE;
-	irc_vdi = graf_handle(&irc_character_width, &irc_character_height,
-		&irc_box_width, &irc_box_height);
-	index = 0;
-	while (index < 10) {
-		irc_work_in[index] = 1;
-		index++;
-	}
-	irc_work_in[10] = 2;
-	if (!v_opnvwk(irc_work_in, &irc_vdi, irc_work_out))
+	irc_vdi = graf_handle(&cw, &ch, &bw, &bh);
+	for (index = 0; index < 10; index++)
+		work_in[index] = 1;
+	work_in[10] = 2;
+	if (!v_opnvwk(work_in, &irc_vdi, irc_work_out))
 		return FALSE;
-	if (irc_character_width <= 0)
-		irc_character_width = 8;
-	if (irc_character_height <= 0)
-		irc_character_height = 16;
-	/*
-	 * v_opnvwk() sets no text size or alignment, so rows drift without
-	 * them, set the cell height and top-left alignment, this client
-	 * passes cell-top y coordinates not a baseline
-	 */
-	{
-		WORD pts_w, pts_h, cell_w, cell_h, prev_h, prev_v;
-		WORD height = irc_work_out[0x30];
-		if (height > 0) {
-			vst_height(irc_vdi, height, &pts_w, &pts_h, &cell_w,
-				&cell_h);
-			if (cell_w > 0)
-				irc_character_width = cell_w;
-			if (cell_h > 0)
-				irc_character_height = cell_h;
-		}
-		vst_alignment(irc_vdi, 0, 5, &prev_h, &prev_v);
-	}
+	if (cw <= 0)
+		cw = 8;
+	if (ch <= 0)
+		ch = 16;
 	vswr_mode(irc_vdi, MD_REPLACE);
+	vst_alignment(irc_vdi, 0, 5, &hor, &ver);	/* y is the cell top */
 	graf_mouse(ARROW, NULL);
 
 	wind_get(0, WF_WXYWH, &irc_desktop.g_x, &irc_desktop.g_y,
 		&irc_desktop.g_w, &irc_desktop.g_h);
-	border.g_x = irc_desktop.g_x + IRC_WINDOW_MARGIN;
-	border.g_y = irc_desktop.g_y + IRC_WINDOW_MARGIN;
-	border.g_w = irc_desktop.g_w - IRC_WINDOW_MARGIN - IRC_WINDOW_MARGIN;
-	border.g_h = irc_desktop.g_h - IRC_WINDOW_MARGIN - IRC_WINDOW_MARGIN;
-	if (border.g_w < IRC_WINDOW_MIN_WIDTH)
-		border.g_w = IRC_WINDOW_MIN_WIDTH;
-	if (border.g_h < IRC_WINDOW_MIN_HEIGHT)
-		border.g_h = IRC_WINDOW_MIN_HEIGHT;
+	border.g_x = irc_desktop.g_x + GEM_IRC_LAYOUT_MARGIN;
+	border.g_y = irc_desktop.g_y + GEM_IRC_LAYOUT_MARGIN;
+	border.g_w = irc_desktop.g_w - 2 * GEM_IRC_LAYOUT_MARGIN;
+	border.g_h = irc_desktop.g_h - 2 * GEM_IRC_LAYOUT_MARGIN;
+	if (border.g_w < GEM_IRC_LAYOUT_MIN_WIDTH)
+		border.g_w = GEM_IRC_LAYOUT_MIN_WIDTH;
+	if (border.g_h < GEM_IRC_LAYOUT_MIN_HEIGHT)
+		border.g_h = GEM_IRC_LAYOUT_MIN_HEIGHT;
 	irc_window = wind_create(IRC_WINDOW_KIND, irc_desktop.g_x,
 		irc_desktop.g_y, irc_desktop.g_w, irc_desktop.g_h);
 	if (irc_window <= 0)
@@ -1333,7 +1238,7 @@ irc_open_window(VOID)
 	if (!wind_open(irc_window, border.g_x, border.g_y, border.g_w,
 			border.g_h))
 		return FALSE;
-	irc_update_work();
+	irc_layout();
 	irc_previous = border;
 	irc_was_full = FALSE;
 	return TRUE;
@@ -1343,30 +1248,18 @@ static VOID
 irc_close_window(VOID)
 {
 	if (irc_window > 0) {
-		(void) wind_close(irc_window);
-		(void) wind_delete(irc_window);
+		wind_close(irc_window);
+		wind_delete(irc_window);
 		irc_window = -1;
 	}
 	if (irc_vdi >= 0) {
-		(void) v_clsvwk(irc_vdi);
+		v_clsvwk(irc_vdi);
 		irc_vdi = -1;
 	}
 	if (irc_application >= 0) {
-		(void) appl_exit();
+		appl_exit();
 		irc_application = -1;
 	}
-}
-
-static VOID
-irc_exec_desktop(VOID)
-{
-	static char desktop_path[] = "/bin/gemdesk";
-	static char desktop_name[] = "gemdesk";
-	char *arguments[2];
-
-	arguments[0] = desktop_name;
-	arguments[1] = (char *) 0;
-	execve(desktop_path, arguments, environ);
 }
 
 static VOID
@@ -1384,9 +1277,13 @@ static WORD
 irc_start_registration(VOID)
 {
 	GEM_IRC_WORD result;
+	const char *nick;
 
+	nick = gem_irc_current_nick(&irc_app.protocol);
+	if (!nick || !*nick)
+		nick = (const char *) irc_nick;
 	gem_irc_connection_reset(&irc_app.protocol);
-	result = gem_irc_app_start(&irc_app, (const char *) irc_nick,
+	result = gem_irc_app_start(&irc_app, nick,
 		(const char *) irc_user, (const char *) irc_real_name);
 	irc_join_sent = 0;
 	if (result <= 0) {
@@ -1403,11 +1300,48 @@ static VOID
 irc_connect_result(GEM_IRC_WORD result)
 {
 	if (result == GEM_IRC_TRANSPORT_OK)
-		(void) irc_start_registration();
+		irc_start_registration();
 	else if (result == GEM_IRC_TRANSPORT_PENDING)
 		irc_connect_ticks = IRC_CONNECT_TICKS;
 	else
 		irc_connection_failed();
+}
+
+static VOID
+irc_user_disconnect(VOID)
+{
+	if (irc_app.connected)
+		(void) gem_irc_send_quit(&irc_app.protocol, "Disconnecting");
+	gem_irc_transport_stop(&irc_transport);
+	irc_manual_offline = 1;
+	irc_registration_started = 0;
+	irc_join_sent = 0;
+	irc_connect_ticks = 0;
+	irc_reconnect_ticks = 0;
+	gem_irc_app_offline(&irc_app, "Disconnected");
+	irc_pending |= GEM_IRC_APP_DIRTY_TABS;
+}
+
+static VOID
+irc_user_reconnect(VOID)
+{
+	GEM_IRC_WORD result;
+
+	if (irc_app.connected)
+		(void) gem_irc_send_quit(&irc_app.protocol, "Reconnecting");
+	gem_irc_transport_stop(&irc_transport);
+	irc_manual_offline = 0;
+	irc_registration_started = 0;
+	irc_join_sent = 0;
+	irc_connect_ticks = 0;
+	irc_reconnect_ticks = 0;
+	gem_irc_app_offline(&irc_app, "Reconnecting");
+	gem_irc_app_connecting(&irc_app, (const char *) irc_server);
+	result = gem_irc_transport_connect(&irc_transport,
+		(const char *) irc_server, irc_port);
+	irc_connect_result(result);
+	irc_quiet_polls = 0;
+	irc_pending |= GEM_IRC_APP_DIRTY_TABS;
 }
 
 static VOID
@@ -1417,7 +1351,7 @@ irc_connect_step(VOID)
 
 	result = gem_irc_transport_progress(&irc_transport);
 	if (result == GEM_IRC_TRANSPORT_OK) {
-		(void) irc_start_registration();
+		irc_start_registration();
 		return;
 	}
 	if (result < 0) {
@@ -1426,7 +1360,7 @@ irc_connect_step(VOID)
 	}
 	if (!irc_timer_elapsed(&irc_connect_ticks))
 		return;
-	/* fifteen seconds is the fixed upper bound */
+	/* fifteen second timeout */
 	gem_irc_transport_close(&irc_transport);
 	irc_connection_failed();
 }
@@ -1438,30 +1372,35 @@ irc_reconnect_step(VOID)
 
 	if (!gem_irc_transport_needs_reconnect(&irc_transport))
 		return;
+	if (irc_manual_offline)
+		return;
 	if (irc_reconnect_ticks && !irc_timer_elapsed(&irc_reconnect_ticks))
 		return;
 	result = gem_irc_transport_reconnect(&irc_transport);
 	irc_connect_result(result);
 }
 
-static VOID
+/* true when more lines may be waiting */
+static WORD
 irc_network_step(VOID)
 {
 	GEM_IRC_WORD result;
 	const char *target;
+	WORD backlog = FALSE;
 
-	/* no reconnect once the one-shot line was accepted and the link dropped */
+	/* no reconnect after smoke text is sent */
 	if (irc_smoke_enabled && irc_smoke_sent
 		&& !gem_irc_transport_is_connected(&irc_transport)) {
-		(void) gem_irc_app_request_close(&irc_app,
+		gem_irc_app_request_close(&irc_app,
 			"One-shot disconnected");
-		return;
+		return FALSE;
 	}
 
 	if (gem_irc_transport_is_connecting(&irc_transport))
 		irc_connect_step();
 	else if (gem_irc_transport_is_connected(&irc_transport)) {
-		(void) gem_irc_app_poll(&irc_app, GEM_IRC_APP_POLL_DEFAULT);
+		backlog = gem_irc_app_poll(&irc_app, IRC_POLL_LINES)
+			== (GEM_IRC_WORD) IRC_POLL_LINES;
 		if (!gem_irc_transport_is_connected(&irc_transport)) {
 			irc_registration_started = 0;
 			irc_join_sent = 0;
@@ -1471,7 +1410,7 @@ irc_network_step(VOID)
 		}
 	} else
 		irc_reconnect_step();
-	if (irc_registration_started && !irc_join_sent
+	if (irc_registration_started && !irc_join_sent && irc_channel[0]
 		&& gem_irc_is_registered(&irc_app.protocol)) {
 		result = gem_irc_app_join(&irc_app,
 			(const char *) irc_channel, (const char *) 0);
@@ -1480,13 +1419,9 @@ irc_network_step(VOID)
 	}
 
 	if (!irc_smoke_enabled || gem_irc_app_is_closing(&irc_app))
-		return;
+		return backlog;
 	if (!irc_smoke_sent) {
-		/*
-		 * target only becomes the channel after the JOIN event, the
-		 * sent flag is set once the transport queue takes the whole
-		 * PRIVMSG, and reconnect handling never clears it
-		 */
+		/* wait for JOIN before sending smoke text */
 		target = gem_irc_app_target(&irc_app);
 		if (irc_join_sent && gem_irc_is_registered(&irc_app.protocol)
 			&& !strcmp(target, (const char *) irc_channel)) {
@@ -1496,89 +1431,164 @@ irc_network_step(VOID)
 			if (result > 0) {
 				irc_smoke_sent = 1;
 				irc_smoke_ticks = IRC_SMOKE_DISPLAY_TICKS;
-				return;
+				return backlog;
 			}
 		}
-		if (!irc_timer_elapsed(&irc_smoke_ticks))
-			return;
-		(void) gem_irc_app_request_close(&irc_app, "One-shot timeout");
-		return;
+		if (irc_timer_elapsed(&irc_smoke_ticks))
+			gem_irc_app_request_close(&irc_app,
+				"One-shot timeout");
+		return backlog;
 	}
-	if (!irc_timer_elapsed(&irc_smoke_ticks))
-		return;
-	(void) gem_irc_app_request_close(&irc_app, "One-shot complete");
+	if (irc_timer_elapsed(&irc_smoke_ticks))
+		gem_irc_app_request_close(&irc_app, "One-shot complete");
+	return backlog;
 }
 
 static VOID
+irc_key(UWORD key)
+{
+	WORD result;
+	UWORD ascii;
+	UWORD scan;
+
+	ascii = key & 0x00ffU;
+	scan = key & 0xff00U;
+	if (scan == 0x3b00U) {
+		irc_action(IRC_ACTION_COMMANDS);
+		return;
+	}
+	if (scan == 0x3c00U) {
+		gem_irc_app_cycle(&irc_app, 1);
+		return;
+	}
+	if (scan == 0x3d00U) {
+		gem_irc_app_cycle(&irc_app, -1);
+		return;
+	}
+	if (ascii == 12U) {
+		gem_irc_app_clear(&irc_app);
+		return;
+	}
+	if (ascii == 18U) {
+		irc_user_reconnect();
+		return;
+	}
+	if (ascii == 19U) {
+		irc_connect_dialog();
+		return;
+	}
+	if (ascii == 23U) {
+		irc_action(IRC_ACTION_CLOSE_TAB);
+		return;
+	}
+	if (ascii == 27U && irc_menu) {
+		irc_menu = 0;
+		irc_damage_all = 1;
+		return;
+	}
+
+	result = gem_irc_app_key(&irc_app, key, (GEM_IRC_UWORD) rows);
+	if (result == GEM_IRC_APP_KEY_CLOSE && !gem_irc_app_is_closing(&irc_app))
+		gem_irc_app_request_close(&irc_app, "Keyboard close");
+	if (result == GEM_IRC_APP_KEY_SUBMITTED)
+		irc_quiet_polls = 0;
+}
+
+/* drain a bounded key burst before the next network batch */
+static VOID
+irc_keys(UWORD key)
+{
+	UWORD mx, my, mb, ks, clicks;
+	UWORD left = IRC_KEY_BURST;
+
+	irc_key(key);
+	while (!irc_quiet_polls && --left && !gem_irc_app_is_closing(&irc_app)
+		&& (evnt_multi_ds(MU_KEYBD | MU_TIMER, 1, 1, 1, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, irc_message, 0, 0, &mx, &my, &mb, &ks,
+			&key, &clicks) & MU_KEYBD))
+		irc_key(key);
+}
+
+/* ELKS time in 10 ms ticks */
+static UWORD
+irc_now(VOID)
+{
+	struct timeval now;
+
+	if (gettimeofday(&now, NULL) < 0)
+		return 0;
+	return (UWORD) ((UWORD) (now.tv_sec * 100L)
+		+ (UWORD) (now.tv_usec / 10000L));
+}
+
+/* poll and draw on fixed clocks so typing cannot starve the socket */
+static VOID
 irc_event_loop(VOID)
 {
-	WORD events;
-	WORD key_result;
-	WORD update_needed;
-	WORD closing_before_events;
-	UWORD dirty_regions;
+	UWORD events, mx, my, mb, ks, key, clicks, timer, now;
+	UWORD appended, draw, user;
+	WORD closing_before_events, redraw, backlog, poll_due;
 
 	irc_quit_ticks = 0;
+	timer = IRC_TIMER_BUSY_MS;
+	backlog = FALSE;
+	irc_poll_tick = irc_now();
+	irc_draw_tick = irc_poll_tick;
+	irc_echo_tick = irc_poll_tick;
 	for (;;) {
-		irc_event_key = 0;
 		irc_message[0] = 0;
 		closing_before_events = gem_irc_app_is_closing(&irc_app);
-		events = evnt_multi_ds(IRC_EVENT_FLAGS,
-			IRC_EVENT_BCLK, IRC_EVENT_BMSK, IRC_EVENT_BST,
-			0, 0, 0, 0, 0,
-			0, 0, 0, 0, 0,
-			irc_message, IRC_EVENT_TIMER_MS, 0,
-			&irc_event_mouse_x, &irc_event_mouse_y,
-			&irc_event_mouse_buttons, &irc_event_key_state,
-			&irc_event_key, &irc_event_clicks);
-		/* socket and DNS work never runs while WIND_UPDATE is held */
-		if (events & MU_TIMER)
-			irc_network_step();
-		update_needed = irc_app.dirty || irc_redraw_pending.g_w > 0
-			|| (events & (MU_MESAG | MU_KEYBD | MU_BUTTON));
-		if (update_needed) {
-			wind_update(IRC_BEG_UPDATE);
-			if (events & MU_MESAG)
-				irc_handle_message(irc_message);
-			if (events & MU_KEYBD) {
-#if defined(IRC_AES_INPUT) && IRC_AES_INPUT
-				key_result = irc_aes_key(irc_event_key);
-#else
-				key_result =
-					gem_irc_app_key(&irc_app, irc_event_key,
-					irc_visible_rows());
-#endif
-				if (key_result == GEM_IRC_APP_KEY_CLOSE) {
-					if (!gem_irc_app_is_closing(&irc_app))
-						(void) gem_irc_app_request_close
-							(&irc_app,
-							"Keyboard close");
-				}
-			}
-			if (events & MU_BUTTON) {
-				WORD acted =
-					irc_tb_click((WORD) irc_event_mouse_x,
-					(WORD) irc_event_mouse_y);
-#if defined(IRC_AES_INPUT) && IRC_AES_INPUT
-				if (!acted)
-					irc_aes_click((WORD) irc_event_mouse_x,
-						(WORD) irc_event_mouse_y);
-#else
-				(void) acted;
-#endif
-			}
-			/* take every dirty region once per event turn */
-			dirty_regions =
-				(UWORD) gem_irc_app_take_dirty(&irc_app);
-			irc_queue_app_redraw(dirty_regions);
-			if (irc_redraw_pending.g_w > 0) {
-				irc_redraw();
-				irc_redraw_pending.g_w = 0;
-			}
-			wind_update(IRC_END_UPDATE);
+		events = evnt_multi_ds(MU_MESAG | MU_KEYBD | MU_TIMER | MU_BUTTON,
+			2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			irc_message, (irc_pending
+				& GEM_IRC_APP_DIRTY_INPUT) ? IRC_ECHO_MS : timer,
+			0, &mx, &my, &mb, &ks, &key, &clicks);
+		redraw = FALSE;
+		now = irc_now();
+		poll_due = (UWORD) (now - irc_poll_tick)
+			>= (irc_quiet_polls < 2U ? IRC_POLL_TICKS
+				: IRC_QUIET_POLL_TICKS);
+		/* keys do not bypass the poll clock */
+		if ((events & MU_KEYBD) ? poll_due
+			: backlog || (events & MU_TIMER) || poll_due) {
+			irc_poll_tick = now;
+			appended = gem_irc_app_appended(&irc_app);
+			backlog = irc_network_step();
+			if (appended != gem_irc_app_appended(&irc_app)
+				|| (!irc_app.connected && !irc_manual_offline))
+				irc_quiet_polls = 0;
+			else if (irc_quiet_polls < IRC_QUIET_POLLS)
+				irc_quiet_polls++;
+			timer = irc_quiet_polls < IRC_QUIET_POLLS
+				? IRC_TIMER_BUSY_MS : IRC_TIMER_IDLE_MS;
 		}
+		/* user changes draw first */
+		irc_pending |= (UWORD) gem_irc_app_take_dirty(&irc_app);
+		if (events & MU_MESAG)
+			redraw = irc_handle_message(irc_message);
+		if (events & MU_KEYBD)
+			irc_keys(key);
+		if (events & MU_BUTTON)
+			redraw |= irc_click((WORD) mx, (WORD) my, (WORD) clicks);
+		redraw |= irc_damage_all;
+		irc_damage_all = 0;
+		user = (UWORD) gem_irc_app_take_dirty(&irc_app);
+		irc_pending |= user;
+		draw = irc_pending;
+		if (!redraw && !(user & ~GEM_IRC_APP_DIRTY_INPUT)
+			&& (UWORD) (now - irc_draw_tick) < IRC_DRAW_TICKS)
+			draw &= GEM_IRC_APP_DIRTY_INPUT;
+		if ((events & MU_KEYBD) && !redraw
+			&& (UWORD) (now - irc_echo_tick) < IRC_ECHO_TICKS)
+			draw &= ~GEM_IRC_APP_DIRTY_INPUT;
+		if (draw & ~GEM_IRC_APP_DIRTY_INPUT)
+			irc_draw_tick = now;
+		if (draw & GEM_IRC_APP_DIRTY_INPUT)
+			irc_echo_tick = now;
+		irc_pending &= (UWORD) ~draw;
+		irc_update(draw, redraw);
 
-		/* closing and queue-drain checks need no screen lock */
+		/* drain queued output before closing */
 		if (gem_irc_app_is_closing(&irc_app)) {
 			if (!irc_transport.transmit_length)
 				break;
@@ -1588,11 +1598,6 @@ irc_event_loop(VOID)
 				&& irc_timer_elapsed(&irc_quit_ticks))
 				break;
 		}
-		(void) irc_event_mouse_x;
-		(void) irc_event_mouse_y;
-		(void) irc_event_mouse_buttons;
-		(void) irc_event_key_state;
-		(void) irc_event_clicks;
 	}
 }
 
@@ -1605,36 +1610,30 @@ main(int argc, char **argv)
 		return 1;
 	if (!irc_open_window()) {
 		irc_close_window();
-		if (irc_return_desktop) {
-			irc_exec_desktop();
-			return 1;
-		}
 		return 1;
 	}
 	gem_irc_transport_init(&irc_transport);
-	gem_irc_transport_bind_app(&irc_transport, &irc_app_transport);
-	gem_irc_app_init(&irc_app, &irc_app_transport);
-	gem_irc_app_set_display_columns(&irc_app, irc_transcript_columns());
+	gem_irc_app_init(&irc_app, &irc_transport);
+	gem_irc_app_set_display_columns(&irc_app, (GEM_IRC_UWORD) columns);
 	irc_join_sent = 0;
 	irc_registration_started = 0;
 	irc_connect_ticks = 0;
 	irc_reconnect_ticks = 0;
-	gem_irc_app_connecting(&irc_app, (const char *) irc_server);
-	irc_queue_full_redraw();
-	irc_redraw();
-	irc_redraw_pending.g_w = 0;
-	(void) gem_irc_app_take_dirty(&irc_app);
-	connect_result = gem_irc_transport_connect(&irc_transport,
-		(const char *) irc_server, irc_port);
-	irc_connect_result(connect_result);
+	irc_manual_offline = irc_show_connect;
+	if (!irc_show_connect)
+		gem_irc_app_connecting(&irc_app, (const char *) irc_server);
+	gem_irc_app_take_dirty(&irc_app);
+	irc_update(0, TRUE);
+	if (irc_show_connect)
+		irc_connect_dialog();
+	else {
+		connect_result = gem_irc_transport_connect(&irc_transport,
+			(const char *) irc_server, irc_port);
+		irc_connect_result(connect_result);
+	}
 	irc_event_loop();
-	gem_irc_app_disconnect(&irc_app, "GEM IRC closed");
+	gem_irc_app_disconnect(&irc_app, "IRC Chat closed");
 	gem_irc_transport_stop(&irc_transport);
 	irc_close_window();
-	/* socket, window, VDI, and AES are all released before the exec */
-	if (irc_return_desktop) {
-		irc_exec_desktop();
-		return 1;
-	}
 	return 0;
 }

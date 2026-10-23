@@ -1,9 +1,4 @@
-/*
- * gem_compat_vdi.c - extra VDI bindings the pinned import left out
- *
- * where the resident's point layout differs from the Atari binding
- * (circle and ellipse radii), the resident layout wins
- */
+/* direct VDI bindings missing from the pinned import */
 
 #include "ppdgem.h"
 #include "ppdv0.h"
@@ -315,9 +310,7 @@ WORD handle, *cur_form;
 }
 
 
-/* polymarkers, marker attrs, line ends, user fill patterns, attribute
- * inquiries, logical input and the exception vectors. the resident
- * serves them all; the pinned import just left the wrappers out */
+/* direct bindings missing from the import */
 
 WORD
 v_pmarker(handle, count, xy)
@@ -600,76 +593,6 @@ WORD handle, max_length, echo_mode, echo_xy[];
 BYTE string[];
 {
 	return vsm_string(handle, max_length, echo_mode, echo_xy, string);
-}
-
-
-/* the four exception vectors. a GEM client is its own ELKS process here
- * so the resident cant call back into it; each reports a null previous
- * vector and installs nothing. VEX_TIMV still answers with the BIOS tick
- * period in milliseconds */
-WORD
-vex_timv(handle, tim_addr, old_addr, scale)
-WORD handle, *scale;
-LPVOID tim_addr, *old_addr;
-{
-	(void) tim_addr;
-	contrl[0] = 118;
-	contrl[1] = 0;
-	contrl[3] = 0;
-	contrl[6] = handle;
-	if (vdi() <= 0 || contrl[4] < 1)
-		return 0;
-	if (scale != (WORD *) 0)
-		*scale = intout[0];
-	/* resident installs nothing, so the previous vector is null */
-	if (old_addr != (LPVOID *) 0)
-		*old_addr = (LPVOID) 0;
-	return 1;
-}
-
-
-static WORD
-vex_vector(handle, opcode, usercode, savecode)
-WORD handle, opcode;
-LPVOID usercode, *savecode;
-{
-	(void) usercode;
-	contrl[0] = opcode;
-	contrl[1] = 0;
-	contrl[3] = 0;
-	contrl[6] = handle;
-	if (vdi() <= 0)
-		return 0;
-	if (savecode != (LPVOID *) 0)
-		*savecode = (LPVOID) 0;
-	return 1;
-}
-
-
-WORD
-vex_butv(handle, usercode, savecode)
-WORD handle;
-LPVOID usercode, *savecode;
-{
-	return vex_vector(handle, 125, usercode, savecode);
-}
-
-
-WORD
-vex_motv(handle, usercode, savecode)
-WORD handle;
-LPVOID usercode, *savecode;
-{
-	return vex_vector(handle, 126, usercode, savecode);
-}
-
-
-WORD
-vex_curv(handle, usercode, savecode)
-WORD handle;
-LPVOID usercode, *savecode;
-{
-	return vex_vector(handle, 127, usercode, savecode);
 }
 
 

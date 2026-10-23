@@ -2,13 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
-/*
- * gem_irc_protocol.h - fixed-buffer IRC protocol engine
- *
- * wire lines cap at 512 bytes including the final CR/LF, an over-long
- * line is refused never truncated, event strings point into the receive
- * buffer so theyre only good until the event callback returns
- */
+/* fixed IRC protocol state */
 
 #ifndef ELKS_GEM_IRC_PROTOCOL_H
 #define ELKS_GEM_IRC_PROTOCOL_H
@@ -33,7 +27,7 @@ typedef char GEM_IRC_UWORD_MUST_BE_TWO_BYTES
 #define GEM_IRC_BUSY                  (-4)
 #define GEM_IRC_NO_OUTPUT             (-5)
 
-/* NAMES is one 353 fragment and NAMES_END is 366 */
+/* NAMES uses 353 and ends with 366 */
 #define GEM_IRC_EVENT_STATUS          1U
 #define GEM_IRC_EVENT_REGISTERED      2U
 #define GEM_IRC_EVENT_PING            3U
@@ -56,20 +50,14 @@ typedef char GEM_IRC_UWORD_MUST_BE_TWO_BYTES
 
 struct gem_irc_event;
 
-/*
- * positive means the transmit queue took the whole line, the transmit
- * buffer is reused on the next call
- */
+/* positive means the output queue took the line */
 typedef GEM_IRC_WORD(*GEM_IRC_OUTPUT_CALLBACK) (void *opaque,
 	const char *line, GEM_IRC_UWORD length);
 
 typedef void (*GEM_IRC_EVENT_CALLBACK)(void *opaque,
 	const struct gem_irc_event * event);
 
-/*
- * views into the line just received, source is the prefix name before
- * any !user@host part, parameters keeps all fifteen RFC parameters
- */
+/* views into the current receive line */
 typedef struct gem_irc_event {
 	GEM_IRC_UWORD type;
 	GEM_IRC_UWORD numeric;
@@ -86,7 +74,7 @@ typedef struct gem_irc_event {
 	const char *const *parameters;
 } GEM_IRC_EVENT;
 
-/* too big for the small ELKS process stack, keep in static near data */
+/* keep this off the ELKS stack */
 typedef struct gem_irc_client {
 	GEM_IRC_OUTPUT_CALLBACK output;
 	GEM_IRC_EVENT_CALLBACK event;
@@ -101,18 +89,15 @@ typedef struct gem_irc_client {
 void gem_irc_init(GEM_IRC_CLIENT * client,
 	GEM_IRC_OUTPUT_CALLBACK output,
 	GEM_IRC_EVENT_CALLBACK event, void *opaque);
-void gem_irc_set_callbacks(GEM_IRC_CLIENT * client,
-	GEM_IRC_OUTPUT_CALLBACK output,
-	GEM_IRC_EVENT_CALLBACK event, void *opaque);
 void gem_irc_connection_reset(GEM_IRC_CLIENT * client);
 
-/* RFC1459 case-insensitive compare, shared by protocol and UI state */
+/* RFC1459 case-insensitive compare */
 GEM_IRC_WORD gem_irc_equal(const char *left, const char *right);
 
 GEM_IRC_WORD gem_irc_is_registered(const GEM_IRC_CLIENT * client);
 const char *gem_irc_current_nick(const GEM_IRC_CLIENT * client);
 
-/* parse one complete line, CR/LF may still be there or already stripped */
+/* parse one complete line */
 GEM_IRC_WORD gem_irc_receive_line(GEM_IRC_CLIENT * client,
 	const char *line, GEM_IRC_UWORD length);
 

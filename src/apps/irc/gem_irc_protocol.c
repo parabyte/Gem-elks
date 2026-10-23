@@ -2,12 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
-/*
- * gem_irc_protocol.c - fixed-buffer IRC line engine
- *
- * two callbacks, one complete outbound IRC line and one parsed UI event,
- * the transport owns the socket and the front end owns the window loop
- */
+/* fixed-buffer IRC line parser */
 
 #include "gem_irc_protocol.h"
 
@@ -67,10 +62,7 @@ gem_irc_starts_with(const char *text, const char *word)
 	return 1;
 }
 
-/*
- * store an accepted nick, an over-long server-supplied nick still shows
- * up in its event but never truncates the current-nick state
- */
+/* store a nick only when it fits */
 static GEM_IRC_WORD
 gem_irc_store_nick(GEM_IRC_CLIENT *client, const char *nick)
 {
@@ -105,7 +97,7 @@ gem_irc_append_char(GEM_IRC_CLIENT *client, GEM_IRC_UWORD *length, char value)
 	return GEM_IRC_OK;
 }
 
-/* append user text, CR and LF refused so no command injection */
+/* append text without CR or LF */
 static GEM_IRC_WORD
 gem_irc_append_text(GEM_IRC_CLIENT *client, GEM_IRC_UWORD *length,
 	const char *text)
@@ -123,7 +115,7 @@ gem_irc_append_text(GEM_IRC_CLIENT *client, GEM_IRC_UWORD *length,
 	return GEM_IRC_OK;
 }
 
-/* middle params may not hold control bytes, spaces, or a colon */
+/* validate a middle parameter */
 static GEM_IRC_WORD
 gem_irc_append_middle(GEM_IRC_CLIENT *client, GEM_IRC_UWORD *length,
 	const char *text)
@@ -194,7 +186,7 @@ gem_irc_add_trailing(GEM_IRC_CLIENT *client, GEM_IRC_UWORD *length,
 	return gem_irc_append_text(client, length, parameter);
 }
 
-/* add CR/LF after at most 510 payload bytes, byte 512 holds the terminator */
+/* add CR/LF and a terminator */
 static GEM_IRC_WORD
 gem_irc_finish(GEM_IRC_CLIENT *client, GEM_IRC_UWORD length)
 {
@@ -283,21 +275,9 @@ gem_irc_init(GEM_IRC_CLIENT *client, GEM_IRC_OUTPUT_CALLBACK output,
 }
 
 void
-gem_irc_set_callbacks(GEM_IRC_CLIENT *client,
-	GEM_IRC_OUTPUT_CALLBACK output,
-	GEM_IRC_EVENT_CALLBACK event, void *opaque)
-{
-	if (!client)
-		return;
-	client->output = output;
-	client->event = event;
-	client->opaque = opaque;
-}
-
-void
 gem_irc_connection_reset(GEM_IRC_CLIENT *client)
 {
-	/* an event callback must not reset the client mid-parse */
+/* finish parsing before a callback can reset state */
 	if (!client || client->receiving)
 		return;
 	client->registered = 0;
@@ -341,7 +321,7 @@ gem_irc_prepare_event(GEM_IRC_EVENT *event, char *tags, char *command,
 	event->extra = (const char *) 0;
 	event->parameters = parameters;
 
-	/* split :nick!user@host in place */
+/* split the prefix in place */
 	if (!prefix)
 		return;
 	cursor = prefix;

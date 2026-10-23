@@ -2,14 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
-/*
- * gem_irc_transport.h - fixed-buffer ELKS/KTCP transport for GEM IRC
- *
- * the only link between the GEM app and the socket, kept in static near
- * data: two outbound lines can wait out partial writes, one inbound line
- * is pieced together across reads, and a 128-byte chunk holds the bytes
- * left after the first finished line
- */
+/* fixed buffers for one ELKS IRC socket */
 
 #ifndef ELKS_GEM_IRC_TRANSPORT_H
 #define ELKS_GEM_IRC_TRANSPORT_H
@@ -17,7 +10,8 @@
 #include "gem_irc_app.h"
 
 #define GEM_IRC_TRANSPORT_HOST_SIZE       64U
-#define GEM_IRC_TRANSPORT_CHUNK_SIZE      128U
+/* one netsys reply */
+#define GEM_IRC_TRANSPORT_CHUNK_SIZE      256U
 
 #define GEM_IRC_TRANSPORT_CLOSED          0U
 #define GEM_IRC_TRANSPORT_CONNECTING      1U
@@ -35,11 +29,6 @@
 #define GEM_IRC_TRANSPORT_LINE_TOO_LONG   (-25)
 #define GEM_IRC_TRANSPORT_BUFFER_SMALL    (-26)
 #define GEM_IRC_TRANSPORT_DISCONNECTED    (-27)
-
-/* readiness bits handed back by the select(2) ABI seam */
-#define GEM_IRC_TRANSPORT_READY_READ      0x0001U
-#define GEM_IRC_TRANSPORT_READY_WRITE     0x0002U
-#define GEM_IRC_TRANSPORT_READY_ERROR     0x0004U
 
 typedef struct gem_irc_transport {
 	GEM_IRC_WORD descriptor;
@@ -67,34 +56,23 @@ typedef struct gem_irc_transport {
 
 void gem_irc_transport_init(GEM_IRC_TRANSPORT * transport);
 
-/*
- * save host/port, run the resolver, then start one nonblocking connect,
- * PENDING means the timer keeps calling progress, a failed attempt keeps
- * the target and goes to RECONNECT
- */
+/* resolve and start a nonblocking connect */
 GEM_IRC_WORD gem_irc_transport_connect(GEM_IRC_TRANSPORT * transport,
 	const char *host, GEM_IRC_UWORD port);
 
-/* retry the saved target, nothing is looked up again */
+/* retry the saved address */
 GEM_IRC_WORD gem_irc_transport_reconnect(GEM_IRC_TRANSPORT * transport);
 
-/*
- * push the nonblocking handshake one step, zero is still waiting, one is
- * done, negative moves the saved target to RECONNECT
- */
+/* advance the nonblocking connect */
 GEM_IRC_WORD gem_irc_transport_progress(GEM_IRC_TRANSPORT * transport);
 
-void gem_irc_transport_bind_app(GEM_IRC_TRANSPORT * transport,
-	GEM_IRC_APP_TRANSPORT * app_transport);
-
-/* public so the smoke harnesses can call them */
-GEM_IRC_WORD gem_irc_transport_write(void *context,
+GEM_IRC_WORD gem_irc_transport_write(GEM_IRC_TRANSPORT *transport,
 	const char *line, GEM_IRC_UWORD length);
-GEM_IRC_WORD gem_irc_transport_poll(void *context, char *line,
+GEM_IRC_WORD gem_irc_transport_poll(GEM_IRC_TRANSPORT *transport, char *line,
 	GEM_IRC_UWORD capacity, GEM_IRC_UWORD * length);
-void gem_irc_transport_close(void *context);
+void gem_irc_transport_close(GEM_IRC_TRANSPORT *transport);
 
-/* stop for good and forget the saved target */
+/* close and forget the target */
 void gem_irc_transport_stop(GEM_IRC_TRANSPORT * transport);
 GEM_IRC_WORD gem_irc_transport_is_connected(const GEM_IRC_TRANSPORT *
 	transport);
@@ -102,19 +80,5 @@ GEM_IRC_WORD gem_irc_transport_is_connecting(const GEM_IRC_TRANSPORT *
 	transport);
 GEM_IRC_WORD gem_irc_transport_needs_reconnect(const GEM_IRC_TRANSPORT *
 	transport);
-GEM_IRC_UWORD gem_irc_transport_last_errno(const GEM_IRC_TRANSPORT * transport);
-GEM_IRC_UWORD gem_irc_transport_attempts(const GEM_IRC_TRANSPORT * transport);
-
-/*
- * assembly helpers for the ELKS socket calls: resolve a host to an IPv4
- * address, connect to it, and poll the socket, the C side only ever sees
- * plain 16-bit words
- */
-GEM_IRC_WORD gem_irc_elks_resolve_ipv4(const char *host,
-	GEM_IRC_UWORD * address_lo, GEM_IRC_UWORD * address_hi);
-GEM_IRC_WORD gem_irc_elks_connect_ipv4(GEM_IRC_WORD descriptor,
-	GEM_IRC_UWORD address_lo, GEM_IRC_UWORD address_hi, GEM_IRC_UWORD port);
-GEM_IRC_WORD gem_irc_elks_select_ready(GEM_IRC_WORD descriptor,
-	GEM_IRC_UWORD want_write);
 
 #endif				/* ELKS_GEM_IRC_TRANSPORT_H */

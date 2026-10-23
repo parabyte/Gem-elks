@@ -1,23 +1,4 @@
-/*
- * gem_aes_tick.c - the AES control-manager tick
- *
- * decides who owns the mouse and keyboard for each input sample, we cant
- * block so we run it once per tick from the main loop and park anything
- * unfinished (see gem_pending.h) for a later tick
- *
- * each tick, in order:
- *   1. advance timers (EVNT_TIMER, menu delays)
- *   2. splice the event tape in if one is recording or playing
- *   3. give the one new sample to one owner down the priority chain:
- *        held modal form/alert -> menu bar -> held GRAF tracker
- *        -> window gadgets -> EVNT_* state
- *   4. ask each manager if a parked call can finish now (the
- *      *_progress functions)
- *
- * the *_complete functions do the other half, take a finished
- * interactions outputs, apply its screen effects through the
- * dispatcher seams, mark the parked slot READY
- */
+/* timers, input ownership and parked AES calls */
 
 #include "gem_aes_internal.h"
 
@@ -25,16 +6,12 @@
 #include "gem_form_resident.h"
 #include "gem_graf_resident.h"
 #include "gem_menu_pull_resident.h"
+#include "gem_proc.h"
 #include "gem_resident_memory.h"
-#include "gem_tape_resident.h"
 #include "gem_vdi_resident.h"
 #include "gem_window_resident.h"
 
-/*
- * deliver the 16 byte message an event result wants, we check the
- * offset:segment pair first so a bad pointer cant eat another clients
- * message
- */
+/* copy one checked 16 byte message */
 WORD
 gem_resident_event_message(const struct gemtrap_request *request,
 	GEM_RESIDENT_PD *pd, const GEM_EVENT_EFFECTS *effects)
@@ -51,11 +28,7 @@ gem_resident_event_message(const struct gemtrap_request *request,
 	return TRUE;
 }
 
-/*
- * hand a released WIND_UPDATE lock to the oldest waiter still alive,
- * skip and fail ones whose client died or whose channel got reused
- * since they parked
- */
+/* give WIND_UPDATE to the oldest live waiter */
 VOID GEM_RESIDENT_COLD
 gem_resident_update_progress(VOID)
 {
@@ -70,7 +43,7 @@ gem_resident_update_progress(VOID)
 		pending = gem_pending_at((WORD) channel);
 		if (!pending || pending->state != GEM_PENDING_WAITING
 			|| pending->operation != GEM_PENDING_UPDATE) {
-			/* not a contender any more, drop the stale link */
+			/* drop a stale link */
 			(void) gem_pending_list_pop
 				(&gem_pending_update_waiters);
 			continue;
@@ -82,7 +55,7 @@ gem_resident_update_progress(VOID)
 			|| pd->task_slot != (UBYTE) pending->request.slot
 			|| pd->generation_lo != pending->buffer_offset
 			|| pd->generation_hi != pending->length) {
-			/* the channel got reused, fail the stale claim */
+			/* fail a reused channel */
 			(void) gem_pending_list_pop
 				(&gem_pending_update_waiters);
 			gem_pending_complete(channel, -1);
@@ -90,36 +63,14 @@ gem_resident_update_progress(VOID)
 		}
 		if (!gem_resident_graf_update_owner(pd, (WORD) channel,
 				GEM_RESIDENT_BEG_UPDATE))
-			return;	/* still locked, try again on release */
+			return;	/* still locked */
 		(void) gem_pending_list_pop(&gem_pending_update_waiters);
 		gem_pending_complete(channel, TRUE);
 		return;
 	}
 }
 
-/* reply to a finished tape, record returns its count, play returns zero */
-static VOID
-gem_resident_tape_finish(VOID)
-{
-	GEM_PENDING *pending;
-	UBYTE channel;
-
-	channel = 0;
-	while (channel < GEM_PROC_CHANNELS) {
-		pending = gem_pending_at((WORD) channel);
-		if (pending->state == GEM_PENDING_WAITING
-			&& pending->operation == GEM_PENDING_TAPE
-			&& !gem_tape_resident_busy((UWORD) channel))
-			gem_pending_complete(channel,
-				(WORD) gem_tape_resident_written());
-		channel++;
-	}
-}
-
-/*
- * one finished GRAF interaction, do its update-lock effects, copy its
- * outputs to the client, mark the slot ready
- */
+/* finish one GRAF request */
 static VOID
 gem_resident_graf_complete(UBYTE channel, const GEM_GRAF_COMPLETION *completion)
 {
@@ -353,7 +304,6 @@ gem_aes_resident_poll(UWORD elapsed_milliseconds)
 	WORD channel;
 	WORD consumed;
 	WORD graf_waiting;
-	WORD tape_finished;
 
 	gem_resident_initialize();
 
@@ -361,39 +311,31 @@ gem_aes_resident_poll(UWORD elapsed_milliseconds)
 	if (elapsed_milliseconds)
 		gem_event_resident_tick(elapsed_milliseconds);
 
-	/* one linked client, the Desktop is always the logical foreground */
-	channel = GEM_PROC_DESKTOP;
+	/* send shared input to the foreground PD */
+	channel = gem_proc_foreground_channel();
 	pd = gem_resident_pd_for_channel(channel);
+	if (!pd || pd->state != GEM_PD_ATTACHED) {
+		channel = GEM_PROC_DESKTOP;
+		pd = gem_resident_pd_for_channel(channel);
+	}
 	if (pd && pd->state == GEM_PD_ATTACHED
 		&& gem_vdi_resident_poll_input(&vdi_input)) {
-		/*
-		 * 2. the tape, playback replaces the hardware sample,
-		 * recording copies it, this is the one place physical
-		 * samples enter the AES so the splice lives here
-		 */
-		tape_finished = FALSE;
-		if (gem_tape_resident_replay(&vdi_input, elapsed_milliseconds, &tape_finished));	/* the tapes sample stands in for the poll */
-		else if (tape_finished)
-			gem_resident_tape_finish();
-		if (gem_tape_resident_sample(&vdi_input, elapsed_milliseconds))
-			gem_resident_tape_finish();
-
 		/* idle tick with no input change, timers only */
 		if (elapsed_milliseconds && !vdi_input.changed) {
 			gem_resident_event_progress();
 			return;
 		}
 
-		/* 3. one owner for the sample, in priority order */
+		/* one owner gets the sample */
 
-		/* 3a. a held modal form or alert takes it outright */
+		/* forms and alerts go first */
 		if (gem_resident_form_input_sample(pd, channel, &vdi_input)) {
 			gem_resident_graf_progress();
 			gem_resident_event_progress();
 			return;
 		}
 
-		/* 3b. the menu bar, a drop-down tracks until dismissed */
+		/* then the menu */
 		menu_input.mouse_x = vdi_input.mouse_x;
 		menu_input.mouse_y = vdi_input.mouse_y;
 		menu_input.mouse_buttons = vdi_input.mouse_buttons;
@@ -414,11 +356,7 @@ gem_aes_resident_poll(UWORD elapsed_milliseconds)
 			return;
 		}
 
-		/*
-		 * 3c. a held GRAF tracker (rubber box, drag box, watch
-		 * box...) always sees the sample, while one waits nothing
-		 * below it may react
-		 */
+		/* then a held GRAF tracker */
 		graf_waiting = gem_graf_resident_waiting((UWORD) channel,
 			pd->generation_lo, pd->generation_hi);
 		graf_input.owner = (UWORD) channel;

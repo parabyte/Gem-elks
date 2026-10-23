@@ -240,6 +240,8 @@ VOID gem_window_resident_detach(GEM_WINDOW_RESIDENT *manager, WORD owner,
 /* bottom-to-top window walk used by the resident frame renderer */
 WORD gem_window_resident_first(const GEM_WINDOW_RESIDENT *manager);
 WORD gem_window_resident_next(const GEM_WINDOW_RESIDENT *manager, WORD handle);
+/* input owner of the top window */
+WORD gem_window_resident_top_owner(const GEM_WINDOW_RESIDENT *manager);
 
 /* rebuild and return the shared nineteen-object W_ACTIVE tree for one open window. the near pointer stays valid only until the next build call, like the original W_ACTIVE */
 OBJECT *gem_window_resident_build_active(GEM_WINDOW_RESIDENT *manager,

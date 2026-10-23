@@ -1,130 +1,175 @@
-gem for elks - what every source file does
+gem for elks - source and architecture notes
+============================================
 
-this is dos gem (digital research gem 3) ported to run on elks on a real
-8086/8088, plain english notes on what each bit of code is for
+This is Digital Research GEM 3 / FreeGEM / OpenGEM adapted to run as a
+resident multi-application service on real-mode ELKS for the 8086/8088.
 
-how it fits together
-  the server (/bin/gem) stays resident and owns the screen, mouse and
-  keyboard, it talks to clients over a pipe on fds 3 and 4
-  the desktop and the apps are separate elks programs (clients), only one
-  runs at a time to save ram, launch a app and the desktop unloads, quit
-  the app and the desktop comes back
-  gem.rsc is the boss, the server wont start without it, all the trees,
-  strings, mouse shapes and alert icons come from it
+Runtime architecture
+--------------------
 
+  /bin/gem is the resident AES/VDI owner.  It registers with the ELKS gemctl
+  syscall and blocks in GEMCTL_NEXT until the kernel has work.
 
-src/server
-  gem_main.c        the server, opens the screen loads gem.rsc loads the
-                    font and spawns the first client, watches it and swaps
-                    in the next program when it asks
+  Clients are ordinary ELKS processes.  Their original bindings execute INT
+  EFh directly.  The kernel validates the AES or VDI parameter block, pins the
+  caller's data segment, queues its register record, and sleeps only that
+  caller.  /bin/gem handles the request and GEMCTL_REPLY wakes it.  There are
+  no transport pipes and no copied wire-protocol parameter blocks.
 
-src/aes           the resident aes (the window/menu/dialog manager)
-  gem_aes_resident.c      main aes state and the per client tables, sets
-                          up screen metrics for everyone
-  gem_aes_call.c          the shared call struct + input checks every aes
-                          entry point uses
-  gem_aes_tick.c          the timer/queue side, hands out timer and message
-                          events to clients
-  gem_aes_internal.h      shared bits the aes files pass around
-  gem_pending.c/.h        parks a client request when it has to wait, wakes
-                          it later
-  gem_event_resident.c    evnt_ calls, mouse, keyboard, timer, message,
-                          multi
-  gem_form_resident.c     form_do dialog handling, buttons and edit fields
-  gem_form_internal.h     shared form bits
-  gem_alert_resident.c    form_alert and form_error, builds the alert from
-                          gem.rsc, merge_str does the %W %L %S swaps
-  gem_fsel_resident.c     the file selector box
-  gem_graf_resident.c     graf_ calls, rubber band, drag box, mouse shape,
-                          growing/shrinking boxes
-  gem_object_resident.c   draws objects (boxes, text, buttons, icons),
-                          finds which object you clicked, this is where
-                          icon labels get centered
-  gem_menu_object_resident.c  draws the menu bar and its objects
-  gem_menu_pull_resident.c    the pull down menus, tracks the highlight
-  gem_menu_seam.c         glue between the menu pieces
-  gem_window_resident.c   wind_ calls, opens/moves/sizes windows, the
-                          borders, title, sliders and arrows
-  gem_shell_resident.c    shel_ calls, remembers the next program to run
-                          so the server can launch it
-  gem_startup_resident.c  appl_init / appl_exit, signs a client in and out
-  gem_resource_resident.c owns a loaded resource and fixes its addresses
-  gem_rsc.c               reads the .rsc file format (records, offsets)
-  gem_system_resource.c   loads the aes own gem.rsc and reads bits out of it
-  gem_scrap_resident.c    the clipboard (scrap) directory
-  gem_tape_resident.c     appl_tplay / appl_trecord, plays back events
-  gem_resident_memory.c   copies memory to/from a client across segments
-  gem_far_resource_elks.c grabs a far memory block from elks (_fmemalloc)
+  ELKS owns process creation, address spaces, scheduling, signals, files, and
+  timers.  GEM uses vfork/_execve/waitpid/kill for tasks, malloc/free for
+  Desktop buffers, _fmemalloc/_fmemfree for far resources, normal ELKS file
+  syscalls for storage, and a 20 ms setitimer/SIGALRM tick.  GEM retains only
+  its GUI state and a small channel-to-PID map.
 
-src/aes/opengem   the original freegem desktop, left as it came, only
-                  small elks tweaks, this is the desk*.c family
-  desktop.c         desktop main, the event loop, sets up gl_wchar etc
-  deskmain / deskact / deskfun / deskwin / deskobj / deskdir  the desktop
-                    guts, windows, files, folders, actions
-  deskapp1/2/3.c    reads deskhi.icn/desklo.icn and desktop.inf, builds the
-                    icon list
-  deskpro.c         launches a program (shel_write), makes the desktop quit
-  deskrsrc.c deskinf.c deskins.c deskcds.c desksupp.c deskiacc.c deskppd.c
-  deskgraf.c deskgsx.c desktype.c desk1.c deskacc.c deskfpd.c optimize.c
-                    more desktop support, graphics, info boxes, install
-  gemdesk_posix.c   the desktop side gemdos calls done on elks
+  Channel zero is Desktop, channel one is the resident AES owner, and channels
+  two through five are concurrent applications/accessories.  Desktop stays
+  running after a launch.  ELKS schedules every process; GEM's foreground tag
+  only routes the shared physical keyboard and mouse to the top-window owner.
 
-src/vdi           the graphics engine (the vdi)
-  gem_vdi_resident.c   the vdi server side, opens the screen, dispatches
-                       every v_ call, holds the font
-  gem_vdi.c            core drawing, lines, boxes, fills, polygons, blits
-  gem_vdi_output.c     the object/text output helpers
-  gem_vdi_text.c       text engine, font chain, styles, alignment, .fnt
-                       loading
-  gem_vdi_font.c       the font chain and reading a glyph out of a font
-  gem_vdi_sysfont.c    loads the system font off disk (sysfont.08/14/16)
-                       into far memory, one for the screen youre on
-  gem_vdi_mouse.c      the mouse cursor draw and move
-  gem_vdi_palette.c    the gem/3 16 colour palette
-  gem_vdi_sound.c      the beep/sound
-  gem_input.c          reads the mouse and keyboard drivers
-  gem_vdi_internal.h   shared vdi bits
+ELKS integration
+----------------
 
-src/vdi/drivers   the actual hardware drivers
-  gem_pcvideo.c/.h/_asm.S   picks the video card and does the fast draws
-  gem_video_planar.c   ega/vga (planes)
-  gem_video_cga.c      cga
-  gem_video_hercules.c hercules
-  gem_video_mono.c     mono/mda
-  gem_video_common.c   bits the video drivers share
-  gem_kbd_ansi.c       keyboard
-  gem_mouse_ms.c       microsoft serial mouse
-  gem_mouse_ps2.c      ps/2 mouse
-  gem_mouse_amstrad.c  amstrad mouse (pc1640)
+  patches/elks/0001-gemtrap-kernel-broker.patch
+      Adds CONFIG_GEM_TRAP, the INT EFh handler, fixed request table, gemctl
+      syscall/libc stub, segment lifetime references, exec/exit events, and
+      O_NONBLOCK IPv4 connect readiness used by GemIRC.
 
-src/apps          the gem programs
-  gemclock.c        the clock
-  gemcalc.c         the calculator
-  gem_app_vdi.c     bits the small apps share
-  gemview/          the web browser (gemview.c, _html.c, _net.c)
-  irc/              the irc chat client (gem_irc*.c, transport + protocol)
+  scripts/apply-elks-kernel.sh
+      Checks and applies that patch to an explicitly named ELKS git checkout.
 
-src/bindings      the client side glue, turns a v_/aes call into a pipe
-                  message to the server
-  gem_client.c      the pipe transport, sends a call and waits for the reply
-  gem_compat_aes.c  aes call wrappers for clients
-  gem_compat_vdi.c  vdi call wrappers for clients
-  gem_wordpair.c    32 bit value helper (lo/hi words)
-  original/         the original dri ppd* bindings, left as they came
+Resident AES and process code
+-----------------------------
 
-src/desktop       the desktop client entry
-  gemdesk_main.c    points the desktop at the pipe and runs gemain
-  gemdos_posix.c    gemdos calls on elks
+  src/server/gem_main.c
+      Registers as kernel broker owner, initializes display/resources, starts
+      Desktop with ELKS vfork/_execve, consumes GEMCTL_NEXT requests, replies,
+      reaps exact child PIDs, and drives AES with ELKS setitimer.
 
-src/include       the headers, the structs and call prototypes
-  aes.h vdi.h       umbrella headers everything includes
-  gem_types.h obdefs.h gsxdefs.h gemdefs.h aesbind.h vdibind.h  the classic
-                    gem types and defines
-  gem_*_resident.h  the prototypes for each resident piece above
-  dos.h gem_proc.h gem_far_resource.h  elks side helpers
-  gem_rsc.h         the .rsc format defines
+  src/aes/gem_proc_elks.c
+      Six fixed GEM channel records backed by real ELKS PIDs.  Launch, delete,
+      adoption, foreground input ownership, and waitpid polling live here.  It
+      contains no scheduler and no process-memory allocator.
 
-build
-  Makefile.elks     builds it all, sets the heap/stack for each program
-  assets/GEMAPPS/GEMSYS  gem.rsc, the icons, desktop.inf and the sysfont
-                    files that ship on the disk
+  src/aes/gem_aes_resident.c
+      AES dispatcher and per-client PD state.  APPL_INIT maps a kernel PID to
+      its reserved channel or adopts an external ELKS process.  Kernel EXIT
+      records tear down the exact PID/task-slot/generation attachment.
+
+  src/aes/gem_aes_tick.c
+      Advances AES timers and routes one input sample to the foreground/top
+      window owner while other ELKS tasks continue to run.
+
+  src/aes/gem_pending.c/.h
+      Parks an AES request whose result is not ready.  The kernel keeps that
+      client asleep until GEMCTL_REPLY or GEMCTL_CANCEL.
+
+  src/aes/gem_shell_resident.c
+      SHEL_* calls.  SHEL_WRITE reserves a channel and immediately starts an
+      ELKS process; it no longer asks the server to replace the current app.
+
+  src/aes/gem_resident_memory.c
+      Bounds-checks kernel-pinned client segments and performs direct 8086
+      segment copies with REP MOVSB.  It does not allocate or mirror memory.
+
+  src/aes/gem_far_resource_elks.c
+      Direct ELKS paragraph allocation for resident RSC data.
+
+  src/aes/gem_event_resident.c
+      EVNT_KEYBD, BUTTON, MOUSE, MESAG, TIMER, MULTI, and DCLICK state.
+
+  src/aes/gem_form_resident.c / gem_alert_resident.c / gem_fsel_resident.c
+      Dialogs, alerts, editable fields, and file selector.
+
+  src/aes/gem_graf_resident.c
+      GRAF tracking, mouse shapes, drag/rubber/watch/grow/shrink operations.
+
+  src/aes/gem_window_resident.c
+      Window allocation, stacking, controls, redraw state, and top-owner
+      lookup used for multi-application input routing.
+
+  src/aes/gem_menu_object_resident.c / gem_menu_pull_resident.c
+      Menu rendering, tracking, selection, and accessory messages.
+
+  src/aes/gem_resource_resident.c / gem_rsc.c / gem_system_resource.c
+      Per-process and system RSC loading, relocation, lookup, and cleanup.
+
+  src/aes/gem_object_resident.c
+      Object-tree drawing, hit testing, and editable object support.
+
+  src/aes/gem_scrap_resident.c
+      Clipboard directory state.
+
+Desktop and filesystem
+----------------------
+
+  src/aes/opengem/
+      The original FreeGEM Desktop.  MULTIAPP paths are enabled, so launching
+      a program allocates another GEM channel instead of unloading Desktop.
+
+  src/desktop/gemdesk_main.c
+      Verifies the live GEMAES INT EFh signature and enters Desktop.
+
+  src/desktop/gemdos_posix.c
+      Maps the Desktop's inherited DOS-named source API straight onto ELKS
+      open/read/write/stat/readdir/chdir/rename/unlink and related calls.  It
+      translates path spelling and error numbers only; no virtual filesystem
+      or helper service exists.
+
+VDI and hardware
+----------------
+
+  src/vdi/gem_vdi_resident.c
+      VDI request dispatcher, screen workstation, and per-channel handles.
+
+  src/vdi/gem_vdi.c / gem_vdi_output.c / gem_vdi_text.c
+      Drawing primitives, raster output, text, styles, alignment, and fonts.
+
+  src/vdi/gem_vdi_font.c / gem_vdi_sysfont.c
+      Font chain and SYSFONT.NN loading into ELKS far memory.
+
+  src/vdi/gem_vdi_mouse.c / gem_vdi_palette.c / gem_vdi_sound.c
+      Cursor, palette, and sound.
+
+  src/vdi/gem_input.c and src/vdi/drivers/
+      Direct console/mouse/video hardware drivers for serial, Amstrad, planar,
+      CGA, Hercules, and monochrome systems.
+
+Client bindings and applications
+--------------------------------
+
+  src/bindings/original/
+      Original AES/VDI bindings, changed to emit INT EFh directly.
+
+  src/bindings/gem_direct_aes.c / gem_direct_vdi.c
+      Extra direct calls using the same INT EFh ABI.
+
+  src/apps/gemclock.c / gemcalc.c / gemview/
+      Independent ELKS GEM clients.  Each checks for the kernel-installed
+      GEMAES vector, calls APPL_INIT, and may run alongside the others.
+
+  src/apps/irc/
+      The Antler IRC client.  It keeps server, channel, and query buffers,
+      sorted names, history, completion, and reconnect state.  Its transport
+      calls ELKS socket, connect, select, read, write, and close directly.
+
+  tests/gem_irc_model.c
+      Host checks for IRC buffers, names, history, activity, and ring wrap.
+
+Build and assets
+----------------
+
+  Makefile.elks
+      Builds the resident owner, Desktop, applications, direct trap library,
+      linker maps, and install tree.  MULTIAPP is always enabled.
+
+  assets/lib/gemsys/
+      GEM.RSC, DESKTOP.RSC, DESKTOP.INF, icons, and system fonts installed at
+      /lib/gemsys.
+
+Compatibility omissions
+-----------------------
+
+  PROC_INFO, PROC_MALLOC, PROC_MFREE, and PROC_SETBLOCK are not emulated.
+  Event tapes and client interrupt-vector callbacks are not exposed.  ELKS
+  owns memory and timers; normal concurrent event delivery remains supported.
