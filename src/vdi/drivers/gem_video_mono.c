@@ -171,7 +171,7 @@ gem_mono_fill_pattern(GEM_VDI_COORD x1, GEM_VDI_COORD y1,
 	}
 }
 
-/* draw a one-bit GEM form, source words and screen share left-to-right bit order so each covered byte is built from the source and merged with one read-modify-write */
+/* draw a one-bit form with byte merges */
 void
 gem_mono_bitmap_replace(GEM_VDI_COORD x1, GEM_VDI_COORD y1,
 	GEM_VDI_COORD x2, GEM_VDI_COORD y2, const GEM_VDI_BITS *bits,
@@ -253,7 +253,7 @@ gem_mono_bitmap_replace(GEM_VDI_COORD x1, GEM_VDI_COORD y1,
 	}
 }
 
-/* draw font rows, glyph mask built per touched byte and merged with one transparent replace so bits outside the glyph keep their value */
+/* draw transparent glyph rows with byte masks */
 void
 gem_mono_glyph_replace(GEM_VDI_COORD x1, GEM_VDI_COORD y1,
 	GEM_VDI_COORD x2, GEM_VDI_COORD y2, const GEM_VDI_UBYTE *rows,

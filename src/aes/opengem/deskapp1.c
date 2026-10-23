@@ -388,7 +388,7 @@ BYTE *app_parse(BYTE *pcurr, ANODE *pa)
 
 VOID app_tran(WORD bi_num)
 {
-#if GEM_TRAP_FAR_DATA
+#if GEM_FAR_DATA
 	/*
 	 * The resident ELKS VDI consumes original GEM standard-form words
 	 * directly.  DOS GEM transformed them into a private driver layout here;

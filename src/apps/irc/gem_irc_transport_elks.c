@@ -11,14 +11,8 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <string.h>
-#include <sys/select.h>
 #include <sys/socket.h>
-#include <sys/time.h>
 #include <unistd.h>
-
-#define GEM_IRC_READY_READ	0x0001U
-#define GEM_IRC_READY_WRITE	0x0002U
-#define GEM_IRC_READY_ERROR	0x0004U
 
 static GEM_IRC_WORD
 gem_irc_resolve_ipv4(const char *host, GEM_IRC_UWORD *address_lo,
@@ -51,41 +45,8 @@ gem_irc_connect_ipv4(GEM_IRC_WORD descriptor, GEM_IRC_UWORD address_lo,
 	remote.sin_port = htons(port);
 	remote.sin_addr.s_addr = ((unsigned long) address_hi << 16)
 		| (unsigned long) address_lo;
-	return (GEM_IRC_WORD) connect((int) descriptor,
-		(struct sockaddr *) &remote, sizeof(remote));
-}
-
-static GEM_IRC_WORD
-gem_irc_select_ready(GEM_IRC_WORD descriptor, GEM_IRC_UWORD want_write)
-{
-	fd_set readers;
-	fd_set writers;
-	fd_set errors;
-	struct timeval now;
-	GEM_IRC_WORD ready;
-
-	if (descriptor < 0 || descriptor >= FD_SETSIZE)
-		return -1;
-	FD_ZERO(&readers);
-	FD_ZERO(&writers);
-	FD_ZERO(&errors);
-	FD_SET((int) descriptor, &readers);
-	FD_SET((int) descriptor, &errors);
-	if (want_write)
-		FD_SET((int) descriptor, &writers);
-	now.tv_sec = 0;
-	now.tv_usec = 0;
-	if (select((int) descriptor + 1, &readers,
-			want_write ? &writers : (fd_set *) 0, &errors, &now) <= 0)
-		return 0;
-	ready = 0;
-	if (FD_ISSET((int) descriptor, &readers))
-		ready |= GEM_IRC_READY_READ;
-	if (FD_ISSET((int) descriptor, &writers))
-		ready |= GEM_IRC_READY_WRITE;
-	if (FD_ISSET((int) descriptor, &errors))
-		ready |= GEM_IRC_READY_ERROR;
-	return ready;
+	return (GEM_IRC_WORD) in_connect((int) descriptor,
+		(struct sockaddr *) &remote, sizeof(remote), 15);
 }
 
 static void
@@ -129,19 +90,6 @@ static GEM_IRC_WORD
 gem_irc_transport_would_block(void)
 {
 	return errno == EAGAIN || errno == EINTR;
-}
-
-/* true while connect is still running */
-static GEM_IRC_WORD
-gem_irc_transport_connect_pending(GEM_IRC_UWORD saved_errno)
-{
-	if (saved_errno == (GEM_IRC_UWORD) EINPROGRESS)
-		return 1;
-#ifdef EALREADY
-	if (saved_errno == (GEM_IRC_UWORD) EALREADY)
-		return 1;
-#endif
-	return 0;
 }
 
 void
@@ -219,25 +167,19 @@ gem_irc_transport_open_saved(GEM_IRC_TRANSPORT *transport)
 		return GEM_IRC_TRANSPORT_SOCKET_FAILED;
 	}
 	transport->descriptor = descriptor;
-	flags = (GEM_IRC_WORD) fcntl(descriptor, F_GETFL, 0);
-	if (flags < 0
-		|| fcntl(descriptor, F_SETFL,
-			flags | O_NONBLOCK) < 0)
-		return gem_irc_transport_fail_io(transport);
-
 	gem_irc_transport_clear_buffers(transport);
 	transport->state = GEM_IRC_TRANSPORT_CONNECTING;
 	result = gem_irc_connect_ipv4(descriptor,
 		transport->address_lo, transport->address_hi, transport->port);
 	if (result == 0) {
+		flags = (GEM_IRC_WORD) fcntl(descriptor, F_GETFL, 0);
+		if (flags < 0 || fcntl(descriptor, F_SETFL,
+				flags | O_NONBLOCK) < 0)
+			return gem_irc_transport_fail_io(transport);
 		transport->state = GEM_IRC_TRANSPORT_CONNECTED;
 		return GEM_IRC_TRANSPORT_OK;
 	}
 	saved_errno = (GEM_IRC_UWORD) errno;
-	if (gem_irc_transport_connect_pending(saved_errno)) {
-		transport->last_errno = 0;
-		return GEM_IRC_TRANSPORT_PENDING;
-	}
 	gem_irc_transport_drop(transport, 1);
 	transport->last_errno = saved_errno;
 	return GEM_IRC_TRANSPORT_CONNECT_FAILED;
@@ -266,46 +208,13 @@ gem_irc_transport_reconnect(GEM_IRC_TRANSPORT *transport)
 GEM_IRC_WORD
 gem_irc_transport_progress(GEM_IRC_TRANSPORT *transport)
 {
-	GEM_IRC_WORD result;
-	GEM_IRC_UWORD ready;
-	GEM_IRC_UWORD saved_errno;
-
 	if (!transport)
 		return GEM_IRC_TRANSPORT_BAD_ARGUMENT;
 	if (transport->state == GEM_IRC_TRANSPORT_CONNECTED)
 		return GEM_IRC_TRANSPORT_OK;
-	if (transport->state != GEM_IRC_TRANSPORT_CONNECTING
-		|| transport->descriptor < 0)
-		return GEM_IRC_TRANSPORT_DISCONNECTED;
-
-	result = gem_irc_select_ready(transport->descriptor, 1U);
-	if (result < 0) {
-		if (gem_irc_transport_would_block())
-			return GEM_IRC_TRANSPORT_IDLE;
-		return gem_irc_transport_fail_io(transport);
-	}
-	ready = (GEM_IRC_UWORD) result;
-	if (!(ready & (GEM_IRC_READY_WRITE | GEM_IRC_READY_ERROR)))
+	if (transport->state == GEM_IRC_TRANSPORT_CONNECTING)
 		return GEM_IRC_TRANSPORT_IDLE;
-
-	/* a second connect reads the KTCP result */
-	result = gem_irc_connect_ipv4(transport->descriptor,
-		transport->address_lo, transport->address_hi, transport->port);
-	if (result < 0) {
-		saved_errno = (GEM_IRC_UWORD) errno;
-		if (saved_errno == (GEM_IRC_UWORD) EISCONN)
-			result = 0;
-		else {
-			if (gem_irc_transport_connect_pending(saved_errno))
-				return GEM_IRC_TRANSPORT_IDLE;
-			gem_irc_transport_drop(transport, 1);
-			transport->last_errno = saved_errno;
-			return GEM_IRC_TRANSPORT_CONNECT_FAILED;
-		}
-	}
-	transport->state = GEM_IRC_TRANSPORT_CONNECTED;
-	transport->last_errno = 0;
-	return GEM_IRC_TRANSPORT_OK;
+	return GEM_IRC_TRANSPORT_DISCONNECTED;
 }
 
 /* flush one nonblocking write */

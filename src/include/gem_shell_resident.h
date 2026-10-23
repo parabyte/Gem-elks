@@ -1,16 +1,10 @@
-/*
- * gem_shell_resident.h - GEM shell manager on ELKS processes
- *
- * calls keep the classic five control words, sixteen input words, seven output
- * words and two offset:segment address slots. bytes move straight between the
- * pinned client segment and fixed storage. SHEL_PUT changes only the requested
- * prefix of the 2048-byte Desktop context, SHEL_GET returns that same prefix
- */
+/* GEM shell calls on ELKS */
 
 #ifndef ELKS_GEM_SHELL_RESIDENT_H
 #define ELKS_GEM_SHELL_RESIDENT_H
 
 #include "gem_bindings_elks.h"
+#include "gem_channels.h"
 
 /* shell selector values */
 #define GEM_SHELL_READ                  120U
@@ -23,7 +17,6 @@
 #define GEM_SHELL_WDEF                  127U
 
 /* fixed dimensions from the original Desktop */
-#define GEM_SHELL_PD_COUNT              6U
 #define GEM_SHELL_DESKTOP_OWNER         0U
 #define GEM_SHELL_COMMAND_BYTES         128U
 #define GEM_SHELL_TAIL_BYTES            128U
@@ -33,7 +26,7 @@
 #define GEM_SHELL_PATH_BYTES            256U
 #define GEM_SHELL_ENV_SEARCH_BYTES      32U
 
-/* one call, after GEM's scalar arrays were copied. every address slot must name the pinned client segment before any byte moves, the bytes go through the resident memory helpers */
+/* one checked client call */
 typedef struct gem_shell_call {
 	UWORD owner;
 	UWORD generation_lo;
@@ -46,13 +39,13 @@ typedef struct gem_shell_call {
 	const GEM_BINDINGS_POINTER_SLOT *addr_in;
 } GEM_SHELL_CALL;
 
-/* clear every process record and put back the Desktop context marker '#' */
+/* clear shell state */
 VOID gem_shell_resident_reset(VOID);
 
-/* dispatch SHEL_READ through SHEL_WDEF. a shell selector with bad args is still handled and returns FALSE, an unknown selector sets *handled FALSE so the next manager can try it */
+/* dispatch SHEL_READ through SHEL_WDEF */
 WORD gem_shell_resident_dispatch(const GEM_SHELL_CALL *call, WORD *handled);
 
-/* release only an exact process generation, a stale EXIT record does nothing */
+/* release one exact client generation */
 VOID gem_shell_resident_detach(UWORD owner, UWORD generation_lo,
 	UWORD generation_hi);
 

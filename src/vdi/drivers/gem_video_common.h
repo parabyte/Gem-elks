@@ -19,7 +19,7 @@
 #define GEM_VIDEO_BYTES_CGA	80
 #define GEM_VIDEO_BYTES_HERCULES	90
 
-/* an unaligned 16-pixel cursor touches three video bytes per row, so the save area keeps 3 bytes x 16 rows per EGA/VGA plane */
+/* save three bytes per cursor row and plane */
 #define GEM_CURSOR_WIDTH	16
 #define GEM_CURSOR_HEIGHT	16
 #define GEM_CURSOR_ROW_BYTES	3
@@ -67,7 +67,7 @@ gem_video_pointer(GEM_VDI_UWORD segment, GEM_VDI_UWORD offset)
 #define gem_pixel_mask(x) \
 	(gem_video_bit_mask[(GEM_VDI_UWORD) (x) & 7])
 
-/* clip the cursor and fill in gem_cursor_save_* state, zero when its off screen or the wrong size */
+/* clip the cursor and prepare its save state */
 GEM_VDI_WORD gem_cursor_prepare(GEM_VDI_SCREEN *screen, GEM_VDI_COORD x,
 	GEM_VDI_COORD y, const GEM_VDI_CURSOR *cursor);
 

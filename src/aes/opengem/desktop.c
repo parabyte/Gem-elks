@@ -228,13 +228,7 @@ VOID men_list(LPTREE mlist, BYTE *dlist, WORD enable)
 	  menu_ienable(mlist, *dlist++, enable);
 }
 
-/*
- * men_update() owns menu items 18 through 44.  Retain their desired DISABLED
- * bits in two 16-bit masks while the original selection logic runs.  This
- * avoids the old enable-all/disable-subset sequence crossing INT EF twice for
- * an item whose final state did not change.  Bit zero represents the first
- * item in each range; shifts advance one place at a time for cheap 8088 code.
- */
+/* track menu state in two 16-bit masks */
 static VOID
 men_mark_state(UWORD *low_disabled, UWORD *high_disabled,
 	WORD item, WORD enable)
@@ -582,7 +576,7 @@ WORD do_viewmenu(WORD item)
 	switch( item )
 	{
 	  case ICONITEM:
-		newview = V_ICON; //Doesn't toggle in DESKTOP v1.2 (G.g_iview == V_ICON) ? V_TEXT : V_ICON;
+		newview = V_ICON; // Desktop 1.2 does not toggle
 		break;
 	  case TEXTITEM:
 	    newview = V_TEXT;
@@ -1160,7 +1154,7 @@ VOID cnx_put()
 	G.g_cnxsave.sitem_save = G.g_csortitem - NAMEITEM;
 	G.g_cnxsave.ccopy_save = G.g_ccopypref;
 	G.g_cnxsave.cdele_save = G.g_cdelepref;
-	G.g_cnxsave.covwr_save = G.g_covwrpref;	// Commented out bits not in DESKTOP v1.2
+	G.g_cnxsave.covwr_save = G.g_covwrpref;	// not in Desktop 1.2
 	G.g_cnxsave.cdclk_save = G.g_cdclkpref;
 	G.g_cnxsave.cmclk_save = G.g_cmclkpref;
 	G.g_cnxsave.ctmfm_save = G.g_ctimeform;
@@ -1277,7 +1271,7 @@ VOID cnx_get(VOID)
 /* Bring back the bits that weren't in 1.2 */
 	G.g_covwrpref = G.g_cnxsave.covwr_save;
 	G.g_cdclkpref = G.g_cnxsave.cdclk_save;
-	G.g_cmclkpref = G.g_cnxsave.cmclk_save;	// Commented out bits not in DESKTOP v1.2
+	G.g_cmclkpref = G.g_cnxsave.cmclk_save;	// not in Desktop 1.2
 	G.g_ctimeform = G.g_cnxsave.ctmfm_save;
 	G.g_cdateform = G.g_cnxsave.cdtfm_save;
 	G.g_cdclkpref = evnt_dclick(G.g_cdclkpref, TRUE);
@@ -1326,7 +1320,7 @@ WORD GEMAIN(WORD ARGC, BYTE *ARGV[])
 	WORD		ev_which;
 //	WSAVE		*pws;
 	LPTREE		tree;
-	GEM_SLOT_WORD_POINTER	plong[2];
+	UWORD FAR		*plong[2];
 	WORD		hsave[2];
 	BYTE		docopyrt;
 /* initialize libraries	*/

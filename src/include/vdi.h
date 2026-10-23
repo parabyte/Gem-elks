@@ -33,7 +33,7 @@ typedef struct gem_vdi_point {
 	GEM_VDI_COORD y;
 } GEM_VDI_POINT;
 
-/* GEM mouse forms are 16 by 16, each word is one scanline, bit 15 leftmost. the mask picks which pixels get touched, the image picks foreground or background */
+/* one 16x16 GEM mouse form */
 typedef struct gem_vdi_cursor {
 	GEM_VDI_WORD width;
 	GEM_VDI_WORD height;
@@ -93,14 +93,15 @@ GEM_VDI_COLOR gem_vdi_set_background(GEM_VDI_SCREEN *screen,
 	GEM_VDI_COLOR color);
 GEM_VDI_WORD gem_vdi_set_use_background(GEM_VDI_WORD enabled);
 void gem_vdi_set_clip(GEM_VDI_SCREEN *screen, GEM_VDI_WORD count,
-	const GEM_VDI_RECT *rect);
+	GEM_VDI_COORD x, GEM_VDI_COORD y, GEM_VDI_COORD width,
+	GEM_VDI_COORD height);
 
 void gem_vdi_point(GEM_VDI_SCREEN *screen, GEM_VDI_COORD x, GEM_VDI_COORD y);
 void gem_vdi_line(GEM_VDI_SCREEN *screen, GEM_VDI_COORD x1,
 	GEM_VDI_COORD y1, GEM_VDI_COORD x2, GEM_VDI_COORD y2,
 	GEM_VDI_WORD draw_last);
 
-/* draw one line through a 16-bit GEM line-style mask. bit 15 is the first point and the mask rotates toward bit zero once per Bresenham step, the phase restarts at bit 15 on every call */
+/* draw a line through one 16-bit style mask */
 void gem_vdi_pattern_line(GEM_VDI_SCREEN *screen, GEM_VDI_COORD x1,
 	GEM_VDI_COORD y1, GEM_VDI_COORD x2, GEM_VDI_COORD y2,
 	GEM_VDI_UWORD pattern, GEM_VDI_WORD draw_last);
@@ -109,27 +110,27 @@ void gem_vdi_rect(GEM_VDI_SCREEN *screen, GEM_VDI_COORD x,
 void gem_vdi_fill_rect(GEM_VDI_SCREEN *screen, GEM_VDI_COORD x,
 	GEM_VDI_COORD y, GEM_VDI_COORD width, GEM_VDI_COORD height);
 
-/* fill from an eight-row screen-aligned mono pattern. bit 7 is the pixel whose absolute x is a multiple of eight. replace mode writes foreground and background both, the other modes draw only the set bits */
+/* fill with an eight-row screen-aligned pattern */
 void gem_vdi_fill_pattern(GEM_VDI_SCREEN *screen, GEM_VDI_COORD x,
 	GEM_VDI_COORD y, GEM_VDI_COORD width, GEM_VDI_COORD height,
 	const GEM_VDI_UBYTE *pattern);
 
-/* draw a GEM one-bit form. each row holds (width + 15) / 16 words, bit 15 leftmost. a clear bit draws the background when use-background is on, transparent otherwise */
+/* draw one GEM one-bit form */
 void gem_vdi_bitmap(GEM_VDI_SCREEN *screen, GEM_VDI_COORD x,
 	GEM_VDI_COORD y, GEM_VDI_COORD width, GEM_VDI_COORD height,
 	const GEM_VDI_BITS *bits);
 
-/* overlay a byte-per-row glyph. source_left_bit masks the leftmost pixel and source bits step right from there. clear bits are transparent. width must not reach past bit zero */
+/* overlay one transparent byte-per-row glyph */
 void gem_vdi_glyph(GEM_VDI_SCREEN *screen, GEM_VDI_COORD x,
 	GEM_VDI_COORD y, GEM_VDI_COORD width, GEM_VDI_COORD height,
 	const GEM_VDI_UBYTE *rows, GEM_VDI_UBYTE source_left_bit);
 
-/* overlay a mono form of any width. each row is STRIDE bytes, bit 7 of the first byte leftmost, clear bits transparent. this is the path styled, scaled, rotated and proportional text takes, the 8-wide glyph and whole-run helpers above stay the fast path for the plain system face */
+/* overlay one transparent mono form */
 void gem_vdi_form(GEM_VDI_SCREEN *screen, GEM_VDI_COORD x, GEM_VDI_COORD y,
 	GEM_VDI_COORD width, GEM_VDI_COORD height,
 	const GEM_VDI_UBYTE *rows, GEM_VDI_UWORD stride);
 
-/* try one fully visible 8-by-16 system-font run. CHARACTERS holds COUNT low-byte codes spaced STRIDE bytes apart. returns zero without drawing when the fast path cant be taken, the glyph loop is the fallback */
+/* try the aligned 8x16 text path */
 GEM_VDI_WORD gem_vdi_text_run(GEM_VDI_SCREEN *screen, GEM_VDI_COORD x,
 	GEM_VDI_COORD y, const GEM_VDI_UBYTE *characters,
 	GEM_VDI_UWORD count, GEM_VDI_UWORD stride,
@@ -137,7 +138,7 @@ GEM_VDI_WORD gem_vdi_text_run(GEM_VDI_SCREEN *screen, GEM_VDI_COORD x,
 void gem_vdi_fill_polygon(GEM_VDI_SCREEN *screen, GEM_VDI_WORD count,
 	const GEM_VDI_WORD *xy);
 
-/* fill a polygon with an eight-row screen-anchored pattern, rows indexed by absolute y so spans tile seamlessly. a null pattern is the plain solid fill */
+/* fill a polygon with a screen-anchored pattern */
 void gem_vdi_fill_polygon_pattern(GEM_VDI_SCREEN *screen,
 	GEM_VDI_WORD count, const GEM_VDI_WORD *xy,
 	const GEM_VDI_UBYTE *pattern);

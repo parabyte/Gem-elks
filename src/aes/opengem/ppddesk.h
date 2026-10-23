@@ -18,10 +18,6 @@
 
 #include "aes.h"
 
-#if MULTIAPP
-#include "gem_proc.h"
-#endif
-
 #define NOTREE ((LPTREE)-1)
 
 #include "deskdefs.h"

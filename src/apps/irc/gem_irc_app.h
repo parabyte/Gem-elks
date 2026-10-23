@@ -9,17 +9,17 @@
 
 #include "gem_irc_protocol.h"
 
-#define GEM_IRC_APP_SCROLL_LINES       32U
-#define GEM_IRC_APP_DISPLAY_SIZE       96U
+#define GEM_IRC_APP_SCROLL_LINES       12U
+#define GEM_IRC_APP_DISPLAY_SIZE       80U
 #define GEM_IRC_APP_INPUT_SIZE         160U
 #define GEM_IRC_APP_TARGET_SIZE        64U
 /* bounded lines per poll */
 #define GEM_IRC_APP_POLL_DEFAULT       64U
-#define GEM_IRC_APP_NICK_SLOTS         32U
-#define GEM_IRC_APP_HISTORY_SLOTS      4U
+#define GEM_IRC_APP_NICK_SLOTS         16U
+#define GEM_IRC_APP_HISTORY_SLOTS      2U
 
 /* one server, one channel and three query buffers */
-#define GEM_IRC_APP_BUFFERS            5U
+#define GEM_IRC_APP_BUFFERS            4U
 #define GEM_IRC_APP_CHANNEL            1U
 
 #define GEM_IRC_APP_BUFFER_FREE        0U

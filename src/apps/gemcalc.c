@@ -9,8 +9,8 @@
 
 #include "aes.h"
 
-#define CALC_X		96
-#define CALC_Y		40
+#define CALC_X		400
+#define CALC_Y		48
 #define CALC_W		160
 #define CALC_H		176
 #define DISP_H		28	/* display strip height */

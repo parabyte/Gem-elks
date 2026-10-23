@@ -1,9 +1,7 @@
 /*
  * gem_wordpair.c - four-byte GEM fields as two 16-bit words
  *
- * some GEM fields hold four-byte values. these move and do math on them
- * as word pairs so ia16-gcc dont pull in its own routines
- * i tried using ia16's functions but they are not as fast as some of these original gem functions
+ * word pairs keep ia16 from pulling in slower helpers
  */
 
 #include "aes.h"
@@ -22,7 +20,7 @@ gem_near_pointer_words(const void FAR *pointer)
 {
 	GEM_U32_WORDS field;
 
-#if GEM_TRAP_FAR_DATA
+#if GEM_FAR_DATA
 	/* ia16 stores a far data pointer as the same two adjacent words a
 	 * GEM resource slot uses */
 	union gem_far_pointer_words {
@@ -45,7 +43,7 @@ gem_near_words_pointer(GEM_U32_WORDS field)
 {
 	/* only the caller's exact DS (or a zero high word in the compact
 	 * ABI) is accepted; resource segments go through GEM_TYPED_SLOT_POINTER */
-#if GEM_TRAP_FAR_DATA
+#if GEM_FAR_DATA
 	if (field.hi != gem_wordpair_data_segment())
 		return NULL;
 #else

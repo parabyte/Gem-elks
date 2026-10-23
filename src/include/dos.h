@@ -60,37 +60,7 @@ typedef struct __attribute__((packed)) gem_fcb {
 
 #define GEM_FCB_DEFINED 1
 
-typedef struct exec_blk {
-	WORD eb_segenv;
-	LPBYTE eb_pcmdln;
-	LPVOID eb_pfcb1;
-	LPVOID eb_pfcb2;
-} EXEC_BLK;
-
-typedef struct over_blk {
-	WORD ob_seglod;
-	WORD ob_relfac;
-} OVER_BLK;
-
-union REGS {
-	struct {
-		UWORD ax;
-		UWORD bx;
-		UWORD cx;
-		UWORD dx;
-		UWORD si;
-		UWORD di;
-		UWORD cflag;
-	} x;
-	struct {
-		UBYTE al, ah;
-		UBYTE bl, bh;
-		UBYTE cl, ch;
-		UBYTE dl, dh;
-	} h;
-};
-
-extern union REGS DR;
+extern UWORD DOS_AX;
 
 WORD dos_chdir(LPBYTE pdrvpath);
 WORD dos_gdir(WORD drive, LPBYTE pdrvpath);
@@ -114,7 +84,6 @@ GEM_U32_WORDS dos_read(WORD handle, GEM_U32_WORDS cnt, LPBYTE pbuffer);
 	gem_u32_to_u16_sat(dos_read((handle), gem_u32_words((cnt), 0), \
 				     (buffer)))
 GEM_U32_WORDS dos_lseek(WORD handle, WORD smode, GEM_U32_WORDS sofst);
-WORD dos_wait(VOID);
 WORD dos_space(WORD drv, GEM_U32_WORDS *ptotal, GEM_U32_WORDS *pavail);
 WORD dos_rmdir(LPBYTE ppath);
 WORD dos_create(LPBYTE pname, WORD attr);
@@ -128,7 +97,4 @@ GEM_U32_WORDS dos_write(WORD handle, GEM_U32_WORDS cnt, LPBYTE pbuffer);
 WORD dos_chmod(LPBYTE pname, WORD func, WORD attr);
 WORD dos_setdt(WORD handle, WORD time, WORD date);
 WORD dos_dtype(WORD drive);
-int int86(int vec, union REGS *inregs, union REGS *outregs);
-int intdos(union REGS *inregs, union REGS *outregs);
-
 #endif

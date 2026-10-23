@@ -162,7 +162,7 @@ VOID gsx_pline(WORD offx, WORD offy, WORD cnt, WORD *pts)
 	 * VDI point array, then issue one polyline.  Desktop drag outlines contain
 	 * only five or nine points.  The later chunk loop which had replaced this
 	 * code allocated 160 hot stack bytes and always made a second zero-point
-	 * gsx_xline() call, adding one needless VDI style trap for every outline
+	 * gsx_xline() call, adding one needless VDI style call per outline
 	 * drawn and erased while the mouse moved.
 	 */
 	for (i=0; i<cnt; i++)

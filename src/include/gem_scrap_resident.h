@@ -25,13 +25,13 @@
 
 #define GEM_SCRAP_TYPES		6U
 
-/* the longest path the AES will hold, one byte over so the trailing separator SCRP_READ appends always fits */
+/* largest stored scrap path */
 #define GEM_SCRAP_PATH_MAX	64U
 
 /* reset the scrap directory to the built-in default */
 VOID gem_scrap_resident_init(VOID);
 
-/* copy the scrap directory, with a trailing separator, into PATH and return the bit vector of scrap files found there */
+/* read the scrap path and file mask */
 WORD gem_scrap_resident_read(BYTE *path, UWORD size);
 
 /* adopt PATH as the scrap directory, false when it isnt a directory */

@@ -12,7 +12,7 @@
 #include "gem_graf_resident.h"
 #include "gem_menu_object_resident.h"
 #include "gem_menu_pull_resident.h"
-#include "gem_proc.h"
+#include "gem_channels.h"
 #include "gem_resource_resident.h"
 #include "gem_window_resident.h"
 
@@ -35,15 +35,6 @@
 #define RSRC_GADDR                    112
 #define RSRC_SADDR                    113
 #define RSRC_OBFIX                    114
-
-#define PROC_CREATE                   60
-#define PROC_RUN                      61
-#define PROC_DELETE                   62
-#define PROC_INFO                     63
-#define PROC_MALLOC                   64
-#define PROC_MFREE                    65
-#define PROC_SWITCH                   66
-#define PROC_SETBLOCK                 67
 
 /* the local-array sizes */
 #define C_SIZE                        5
@@ -84,9 +75,7 @@
 #define GEM_PD_FREE                   0
 #define GEM_PD_ATTACHED               1
 
-/* one record per original GEM PD, the tag is the array index */
-
-/* APPL_INIT X_BUF: three near-pointer offsets plus the two-word abilities field. resident pointers cant fit a near offset, so those slots come back zero */
+/* resident pointers do not fit APPL_INIT's near X_BUF slots */
 typedef struct __attribute__((packed)) gem_resident_xbuf {
 	UWORD buf_len;
 	WORD arch;
@@ -109,21 +98,19 @@ typedef BYTE GEM_RESIDENT_MENU_TEXT_POINTER_MUST_BE_4_BYTES
 	[(sizeof(GEM_RESIDENT_MENU_TEXT_POINTER) == 4) ? 1 : -1];
 
 
-/* the trap frame array sizes */
+/* AES array sizes */
 #define G_SIZE_RESIDENT               15
 #define I_SIZE                        16
 #define O_SIZE                        7
 #define AI_SIZE                       2
 
-/* one attached client, like the original PD */
-/* one record per original GEM PD, the tag is the array index */
+/* one attached GUI client */
 typedef struct gem_resident_pd {
 	UWORD pid;
 	UWORD segment;
 	UWORD limit;
 	UWORD generation_lo;
 	UWORD generation_hi;
-	UBYTE task_slot;
 	UBYTE state;
 	BYTE name[8];
 	UWORD queue_index;
@@ -138,7 +125,7 @@ typedef BYTE GEM_RESIDENT_PD_MUST_BE_172_BYTES
 	[(sizeof(GEM_RESIDENT_PD) == 172) ? 1 : -1];
 
 
-/* --- the trap frame the dispatcher fills for every call --- */
+/* arrays filled for each request */
 
 extern UWORD control[C_SIZE];
 extern UWORD aes_global[G_SIZE_RESIDENT];
@@ -162,7 +149,7 @@ VOID gem_resident_initialize(VOID);
 
 UWORD gem_resident_data_segment(VOID);
 GEM_RESIDENT_PD *gem_resident_pd_for_channel(WORD channel);
-GEM_RESIDENT_PD *gem_resident_pd_for_request(const struct gemtrap_request
+GEM_RESIDENT_PD *gem_resident_pd_for_request(const struct gem_request
 	*request, WORD *channel);
 VOID gem_resident_queue_progress(GEM_RESIDENT_PD * pd);
 VOID gem_resident_enqueue_window_message(GEM_RESIDENT_PD * pd,
@@ -199,7 +186,7 @@ VOID gem_resident_dequeue(GEM_RESIDENT_PD * pd, UWORD segment, UWORD offset,
 /* --- the control tick, in gem_aes_tick.c --- */
 
 /* deliver the sixteen-byte message an event result asks for */
-WORD gem_resident_event_message(const struct gemtrap_request *request,
+WORD gem_resident_event_message(const struct gem_request *request,
 	GEM_RESIDENT_PD * pd, const GEM_EVENT_EFFECTS *effects);
 /* hand a released WIND_UPDATE lock to the oldest live contender */
 VOID GEM_RESIDENT_COLD gem_resident_update_progress(VOID);
@@ -220,10 +207,10 @@ WORD gem_resident_menu_restore(const GRECT *rectangle, WORD extra_owner);
 WORD gem_resident_menu_opaque_backing(const GRECT *rectangle);
 WORD gem_resident_menu_apply_effects(const GEM_MENU_PULL_EFFECTS *effects);
 VOID gem_resident_menu_detach_owner(GEM_RESIDENT_PD * pd, WORD channel);
-WORD gem_resident_menu_bar(const struct gemtrap_request *request);
-WORD gem_resident_menu_text(const struct gemtrap_request *request,
+WORD gem_resident_menu_bar(const struct gem_request *request);
+WORD gem_resident_menu_text(const struct gem_request *request,
 	const GEM_RESIDENT_PD * pd, GEM_BINDINGS_POINTER_SLOT address,
 	GEM_RESIDENT_MENU_TEXT_POINTER * pointer, UWORD *limit);
-WORD gem_resident_menu_pull(const struct gemtrap_request *request);
+WORD gem_resident_menu_pull(const struct gem_request *request);
 
 #endif				/* ELKS_GEM_AES_INTERNAL_H */

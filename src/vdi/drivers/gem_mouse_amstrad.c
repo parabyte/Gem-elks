@@ -54,7 +54,7 @@ gem_mouse_amstrad_poll(GEM_VDI_COORD *delta_x, GEM_VDI_COORD *delta_y)
 	GEM_VDI_UBYTE x_count;
 	GEM_VDI_UBYTE y_count;
 
-	/* read then clear each counter, a count between read and clear is lost but at 50 polls/sec thats one step, period drivers did the same */
+	/* read and clear each movement counter */
 	x_count = (GEM_VDI_UBYTE) inb(GEM_AMSTRAD_PORT_X);
 	outb(0, GEM_AMSTRAD_PORT_X);
 	y_count = (GEM_VDI_UBYTE) inb(GEM_AMSTRAD_PORT_Y);

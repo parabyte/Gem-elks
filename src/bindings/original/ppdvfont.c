@@ -1,14 +1,4 @@
-/*
- * Classic GEM VDI font bindings missing from the compact Pacific binding set.
- *
- * The original applications keep the historical five-array VDIPB.  These
- * wrappers only arrange byte-sized characters in 16-bit VDI words and then
- * use the same checked vdisys IPC path as every other drawing operation.
- * Counts, font identifiers, point sizes, and metrics remain one word.  The
- * sole fixed-point field is VST_ROTATION: one signed word stores tenths of a
- * degree (scale 10) and is passed unchanged, with no rounding in this wrapper.
- * No multiplication, division, allocation, or floating point is used.
- */
+/* classic GEM VDI font calls */
 
 #include "ppdgem.h"
 #include "ppdv0.h"

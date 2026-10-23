@@ -2,7 +2,7 @@
 
 #include "gem_shell_resident.h"
 #include "gem_aes_call.h"
-#include "gem_proc.h"
+#include "gem_exec.h"
 #include "gem_system_resource.h"
 
 #include <unistd.h>
@@ -24,7 +24,7 @@ typedef struct gem_shell_pd {
 	UBYTE default_directory[GEM_SHELL_DEFAULT_DIR_BYTES];
 } GEM_SHELL_PD;
 
-static GEM_SHELL_PD gem_shell_pds[GEM_SHELL_PD_COUNT];
+static GEM_SHELL_PD gem_shell_pds[GEM_CHANNEL_COUNT];
 static UBYTE gem_shell_context[GEM_SHELL_CONTEXT_BYTES];
 static UWORD gem_shell_context_owner;
 static UWORD gem_shell_context_generation_lo;
@@ -42,16 +42,10 @@ static UBYTE gem_shell_default_dir_scratch[GEM_SHELL_DEFAULT_DIR_BYTES];
 static UBYTE gem_shell_env_scratch[GEM_SHELL_ENV_SEARCH_BYTES];
 
 static const UBYTE gem_shell_initial_command[] = "/bin/gemdesk";
-/*
- * ELKS puts the GEM binaries in /bin like everything else, so /bin is
- * searched after the resource list, the rest comes from GEM.RSC STINPATH
- */
+/* search /bin after GEM.RSC STINPATH */
 static const UBYTE gem_shell_bin_prefix[] = "/bin/";
 
-/*
- * STINPATH, GEM.RSC semicolon list, normalised to ELKS spelling once,
- * this is the program search path
- */
+/* cached ELKS spelling of STINPATH */
 static UBYTE gem_shell_search_path[GEM_SHELL_PATH_BYTES];
 static UBYTE gem_shell_search_ready;
 
@@ -77,10 +71,7 @@ gem_shell_load_search_path(VOID)
 			gem_shell_search_path[index] = (UBYTE) '/';
 }
 
-/*
- * copy the element'th search entry into destination with a trailing slash
- * returns FALSE past the last one
- */
+/* copy one search entry with its trailing slash */
 static WORD
 gem_shell_search_element(UWORD element, UBYTE *destination, UWORD size)
 {
@@ -259,7 +250,7 @@ gem_shell_pd_at(UWORD owner)
 {
 	GEM_SHELL_PD *pd;
 
-	if (owner >= GEM_SHELL_PD_COUNT)
+	if (owner >= GEM_CHANNEL_COUNT)
 		return (GEM_SHELL_PD *) 0;
 	pd = gem_shell_pds;
 	while (owner--)
@@ -294,10 +285,7 @@ gem_shell_bind_pd(const GEM_SHELL_CALL *call)
 static VOID
 gem_shell_reset_context(VOID)
 {
-	/*
-	 * first SHEL_GET returns zeros, the Desktop reads a leading byte thats
-	 * not '#' as load the real DESKTOP.INF
-	 */
+	/* the first SHEL_GET returns zeros */
 	gem_shell_clear_bytes(gem_shell_context, GEM_SHELL_CONTEXT_BYTES);
 	gem_shell_context_owner = GEM_SHELL_OWNER_NONE;
 	gem_shell_context_generation_lo = 0;
@@ -327,7 +315,7 @@ gem_shell_resident_reset(VOID)
 	UWORD count;
 
 	pd = gem_shell_pds;
-	count = GEM_SHELL_PD_COUNT;
+	count = GEM_CHANNEL_COUNT;
 	while (count--) {
 		gem_shell_reset_pd(pd);
 		pd++;
@@ -358,11 +346,7 @@ gem_shell_join(UBYTE *destination, const UBYTE *prefix, const UBYTE *suffix)
 	return TRUE;
 }
 
-/*
- * GEM roots its tree at GEMAPPS, ELKS keeps it under /lib, so a leading
- * /GEMAPPS (any case) becomes /lib in place, e.g. /GEMAPPS/GEMSYS is
- * /lib/gemsys
- */
+/* map /GEMAPPS to /lib */
 static VOID
 gem_shell_remap_root(UBYTE *path)
 {
@@ -389,10 +373,7 @@ gem_shell_remap_root(UBYTE *path)
 	path[3] = (UBYTE) 'b';
 }
 
-/*
- * GEM path to ELKS path, drop drive letters (tree is rooted at /lib/gemsys)
- * and turn backslashes into slashes
- */
+/* turn one GEM path into an ELKS path */
 static WORD
 gem_shell_normalize(const UBYTE *source, UBYTE *destination)
 {
@@ -439,10 +420,7 @@ gem_shell_copy_path(UBYTE *destination, const UBYTE *source)
 		source);
 }
 
-/*
- * the resident AES has a different ELKS cwd from Desktop, so a relative
- * name is looked up against the resource path list, then /bin
- */
+/* resolve a relative name through STINPATH and /bin */
 static WORD
 gem_shell_find_native(const UBYTE *input, UBYTE *found)
 {
@@ -530,23 +508,7 @@ gem_shell_read(const GEM_SHELL_CALL *call, GEM_SHELL_PD *pd)
 static WORD
 gem_shell_launch(GEM_SHELL_PD *pd)
 {
-	GEM_U32_WORDS no_base;
-	GEM_U32_WORDS no_size;
-	WORD channel;
-
-	no_base.lo = 0;
-	no_base.hi = 0;
-	no_size.lo = 0;
-	no_size.hi = 0;
-	channel = -1;
-	if (!proc_create(no_base, no_size, FALSE, pd->is_gem, &channel))
-		return FALSE;
-	if (!proc_run(channel, pd->is_gem, pd->overlay,
-			(LPBYTE) pd->command, (LPBYTE) pd->tail)) {
-		(void) proc_delete(channel);
-		return FALSE;
-	}
-	return TRUE;
+	return gem_exec((LPBYTE) pd->command, (LPBYTE) pd->tail, NULL);
 }
 
 static WORD
@@ -662,10 +624,7 @@ gem_shell_envrn(const GEM_SHELL_CALL *call)
 			gem_shell_env_scratch, GEM_SHELL_ENV_SEARCH_BYTES))
 		return FALSE;
 
-	/*
-	 * this used to return a pointer into the owner's environment, that cant
-	 * name bytes in a separate ELKS client DS, so we clear it and return FALSE
-	 */
+	/* client segments cannot hold the resident environ pointer */
 	no_value.lo = 0;
 	no_value.hi = 0;
 	if (!gem_shell_client_to(call, (const UBYTE *) &no_value,

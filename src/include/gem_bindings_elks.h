@@ -1,4 +1,4 @@
-/* direct INT EFh binding ABI */
+/* direct stock ELKS binding ABI */
 
 #ifndef ELKS_GEM_BINDINGS_ELKS_H
 #define ELKS_GEM_BINDINGS_ELKS_H
@@ -36,9 +36,6 @@ VOID gem_bindings_store_pointer(GEM_BINDINGS_POINTER_SLOT *slot,
 	const VOID FAR * pointer);
 GEM_SLOT_POINTER gem_bindings_load_pointer(const GEM_BINDINGS_POINTER_SLOT
 	*slot);
-UWORD gem_bindings_far_word(UWORD segment, UWORD offset);
-UBYTE gem_bindings_far_byte(UWORD segment, UWORD offset);
-
 /* keep the full resource pointer */
 WORD rsrc_gaddr_far(WORD rstype, WORD rsid, GEM_BINDINGS_POINTER_SLOT *address);
 
@@ -50,7 +47,5 @@ WORD gem(GEM_BINDINGS_AESPB *parameter_block);
 WORD vdi(VOID);
 WORD aescheck(VOID);
 WORD gemcheck(VOID);
-
-#include "gem_proc.h"
 
 #endif				/* ELKS_GEM_BINDINGS_ELKS_H */

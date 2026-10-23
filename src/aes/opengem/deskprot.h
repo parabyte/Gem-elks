@@ -329,7 +329,6 @@ WORD desk_sound(WORD isfreq, WORD freq, WORD duration);
 char   *scasb(char *s, char b);
 VOID dos_label(BYTE drive, BYTE *plabel);
 WORD dos_dtype(WORD drive);
-BOOLEAN cd_isdrvcd (BYTE drive);
 #if DEBUG
 WORD form_valert(WORD button, BYTE *str, ...);
 WORD dbg(BYTE *str, ...);

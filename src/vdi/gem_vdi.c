@@ -202,19 +202,20 @@ gem_vdi_set_use_background(GEM_VDI_WORD enabled)
 
 void
 gem_vdi_set_clip(GEM_VDI_SCREEN *screen, GEM_VDI_WORD count,
-	const GEM_VDI_RECT *rect)
+	GEM_VDI_COORD x, GEM_VDI_COORD y, GEM_VDI_COORD width,
+	GEM_VDI_COORD height)
 {
-	if (!count || !rect) {
+	if (!count) {
 		gem_clip_x1 = 0;
 		gem_clip_y1 = 0;
 		gem_clip_x2 = screen->xres - 1;
 		gem_clip_y2 = screen->yres - 1;
 		return;
 	}
-	gem_clip_x1 = rect->x;
-	gem_clip_y1 = rect->y;
-	gem_clip_x2 = rect->x + rect->width - 1;
-	gem_clip_y2 = rect->y + rect->height - 1;
+	gem_clip_x1 = x;
+	gem_clip_y1 = y;
+	gem_clip_x2 = x + width - 1;
+	gem_clip_y2 = y + height - 1;
 	if (gem_clip_x1 < 0)
 		gem_clip_x1 = 0;
 	if (gem_clip_y1 < 0)

@@ -25,7 +25,7 @@ GEM_VDI_UWORD gem_cursor_save_first_byte;
 GEM_VDI_UWORD gem_cursor_save_rows;
 GEM_VDI_UWORD gem_cursor_save_bytes;
 
-/* line one cursor row up with the video bytes it lands in, source words keep GEM layout with bit 15 leftmost */
+/* align one cursor row with its video bytes */
 static void
 gem_cursor_make_row(GEM_VDI_COORD cursor_x, GEM_VDI_COORD screen_width,
 	GEM_VDI_BITS mask_bits, GEM_VDI_BITS image_bits,
@@ -70,13 +70,13 @@ gem_cursor_make_row(GEM_VDI_COORD cursor_x, GEM_VDI_COORD screen_width,
 		screen_x++;
 		column++;
 		source_bit >>= 1;
-		/* advance only after the byte's last bit is used, testing before the pixel wrote a byte-aligned cursor past its row */
+		/* advance after the byte's last bit */
 		if (!((GEM_VDI_UWORD) screen_x & 7))
 			byte_index++;
 	}
 }
 
-/* clip first, then build the byte masks once for all rows, positions outside -15 through the last screen pixel are refused so adding 15 cant overflow a signed 16-bit number */
+/* clip once and build masks for every row */
 GEM_VDI_WORD
 gem_cursor_prepare(GEM_VDI_SCREEN *screen, GEM_VDI_COORD x,
 	GEM_VDI_COORD y, const GEM_VDI_CURSOR *cursor)

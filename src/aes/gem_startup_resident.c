@@ -50,7 +50,7 @@ typedef struct gem_startup_pd {
 	UBYTE state;
 } GEM_STARTUP_PD;
 
-static GEM_STARTUP_PD gem_startup_pds[GEM_STARTUP_PD_COUNT];
+static GEM_STARTUP_PD gem_startup_pds[GEM_CHANNEL_COUNT];
 static GEM_STARTUP_SCREEN gem_startup_screen;
 static GEM_BINDINGS_POINTER_SLOT gem_startup_bvdisk;
 static GEM_BINDINGS_POINTER_SLOT gem_startup_bvhard;
@@ -65,7 +65,7 @@ gem_startup_pd_at(UWORD owner)
 	GEM_STARTUP_PD *pd;
 	UWORD index;
 
-	if (owner >= GEM_STARTUP_PD_COUNT)
+	if (owner >= GEM_CHANNEL_COUNT)
 		return (GEM_STARTUP_PD *) 0;
 	pd = gem_startup_pds;
 	index = owner;
@@ -182,7 +182,7 @@ gem_startup_resident_reset(VOID)
 	UWORD count;
 
 	pd = gem_startup_pds;
-	count = GEM_STARTUP_PD_COUNT;
+	count = GEM_CHANNEL_COUNT;
 	while (count--)
 		gem_startup_clear_pd(pd++);
 

@@ -292,14 +292,11 @@ WORD iac_names(LPTREE tree)
 VOID iac_save(LPTREE tree)
 {
 	WORD		i;
-	WORD		chnum;
 	WORD		isswap;
 	GEM_SLOT_BYTE_POINTER lst;
 	GEM_TYPED_SLOT_POINTER slot;
 	LPOBJ object;
 	LPTEDI tedi;
-	GEM_U32_WORDS	base_hint;
-	GEM_U32_WORDS	size_hint;
 	BYTE		didalert;
 	WORD 		didrun;
 
@@ -313,11 +310,8 @@ VOID iac_save(LPTREE tree)
 #endif
 	dos_chdir(G.a_cmd);
 
-	base_hint = gem_u32_words(0, 0);
-	size_hint = gem_u32_words(0, 0);
 	didalert = FALSE;
 	gl_keepac = FALSE;
-	proc_delete(-1);		/* delete all accessories	*/
 	for (i=0; i<3; i++)
 	{
 	  object = desk_object_at(tree, ACC1NAME + i);
@@ -341,11 +335,7 @@ VOID iac_save(LPTREE tree)
 
 
 #if defined(ELKS) && ELKS
-	    /*
-	     * The hidden GEM/XM checkbox must not leak a stale RSC or INF byte
-	     * back into process policy.  FALSE asks the native process manager
-	     * for its one kernel-owned, non-swapped accessory allocation mode.
-	     */
+	    /* ELKS owns swapping and memory */
 	    gl_caccs[i].acc_swap = 'Y';
 	    isswap = FALSE;
 #else
@@ -354,28 +344,17 @@ VOID iac_save(LPTREE tree)
 	    isswap = (gl_caccs[i].acc_swap == 'N');
 #endif
 	    gl_keepac |= isswap;	/* if TRUE, no full step	*/
-	    /* ELKS allocates each accessory's address space during exec. */
-	    if (proc_create(base_hint, size_hint,
-			    isswap, TRUE, &chnum))
-	    {
 #if defined(ELKS) && ELKS
-	      /*
-	       * proc_run executes in the resident AES owner, whose cwd is not the
-	       * Desktop's cwd.  Pass the complete native path so a selected file
-	       * always means the same inode in both processes.
-	       */
+	      /* launch the selected absolute path */
 	      strlcpy(&G.g_cmd[0], IAC_ELKS_COMMAND_PREFIX,
 		       sizeof(G.g_cmd));
 	      strlcat(&G.g_cmd[0], &(gl_caccs[i].acc_name[0]),
 		       sizeof(G.g_cmd));
-	      didrun = proc_run(chnum, 1, 3, G.a_cmd, ADDR("\0"));
+	      didrun = shel_write(TRUE, 1, 3, G.a_cmd, ADDR("\0"));
 #else
-	      didrun = proc_run(chnum, 1, 3,
+	      didrun = shel_write(TRUE, 1, 3,
 			     &(gl_caccs[i].acc_name[0]), ADDR("\0"));
 #endif
-	    }
-	    else
-	      didrun = FALSE;
 	    if ((!didalert) && (!didrun))
 	    {
 	      form_alert(1, ini_str(STACCMEM));

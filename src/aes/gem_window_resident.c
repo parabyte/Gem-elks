@@ -387,7 +387,7 @@ gem_window_control_clear(GEM_WINDOW_RESIDENT *manager)
 	gem_window_rect_zero(&manager->control_track);
 }
 
-/* floor(value * multiplier / divisor) in word maths, callers keep value <= divisor and multiplier <= 1000 */
+/* scale one bounded word without overflow */
 static UWORD
 gem_window_scale(UWORD value, UWORD multiplier, UWORD divisor)
 {
@@ -645,7 +645,7 @@ gem_window_release_temporary(GEM_WINDOW_RESIDENT *manager,
 	}
 }
 
-/* split a rect around an occluder: top and bottom keep the full width, left and right cover only the overlap */
+/* split a rectangle around an occluder */
 static WORD
 gem_window_break_one(GEM_WINDOW_RESIDENT *manager,
 	GEM_WINDOW_ORECT **link, const GRECT *occluder)
@@ -890,7 +890,7 @@ gem_window_background_dirty(GEM_WINDOW_EFFECTS *effects, const GRECT *rectangle)
 	gem_window_dirty(effects, rectangle);
 }
 
-/* the drop shadow reaches a couple px right of and below the window, so mark that extra area dirty too */
+/* include the drop shadow in the dirty area */
 static VOID
 gem_window_frame_dirty(const GEM_WINDOW_RESIDENT *manager,
 	GEM_WINDOW_EFFECTS *effects, const GRECT *rectangle)

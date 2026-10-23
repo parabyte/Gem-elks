@@ -8,6 +8,7 @@
  * console graphics lock, and hands drawing to the per-adapter files
  */
 
+#include <errno.h>
 #include <linuxmt/ntty.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,13 +58,73 @@ gem_requested_adapter(void)
 	return gem_bios_video_detect();
 }
 
+static void
+gem_font_words(unsigned long address, GEM_VDI_UWORD *segment,
+	GEM_VDI_UWORD *offset)
+{
+	*offset = (GEM_VDI_UWORD) address;
+	*segment = (GEM_VDI_UWORD) (address >> 16);
+}
+
+GEM_VDI_WORD
+gem_pc_video_font(GEM_VDI_UWORD wanted_rows, GEM_VDI_UWORD *rows,
+	GEM_VDI_UWORD *segment, GEM_VDI_UWORD *offset,
+	GEM_VDI_UWORD *upper_segment, GEM_VDI_UWORD *upper_offset)
+{
+	unsigned long address;
+	unsigned long other;
+
+	if (!rows || !segment || !offset || !upper_segment || !upper_offset) {
+		errno = EINVAL;
+		return 0;
+	}
+
+	*upper_segment = 0;
+	*upper_offset = 0;
+	if (wanted_rows <= 8U) {
+		*rows = 8U;
+		address = gem_bios_font_address(0x0300U);
+		other = gem_bios_font_address(0x0400U);
+	} else if (wanted_rows <= 14U) {
+		*rows = 14U;
+		address = gem_bios_font_address(0x0200U);
+		other = gem_bios_font_address(0x0600U);
+		if (!address || address == other) {
+			address = other;
+			*rows = 16U;
+		}
+	} else {
+		*rows = 16U;
+		address = gem_bios_font_address(0x0600U);
+		other = 0;
+	}
+
+	if (!address) {
+		errno = ENODEV;
+		return 0;
+	}
+	gem_font_words(address, segment, offset);
+	if (*rows == 8U) {
+		if (other) {
+			gem_font_words(other, upper_segment, upper_offset);
+		} else {
+			*upper_segment = *segment;
+			*upper_offset = (GEM_VDI_UWORD) (*offset + 1024U);
+			if (*upper_offset < *offset)
+				*upper_segment = (GEM_VDI_UWORD)
+					(*upper_segment + 0x1000U);
+		}
+	}
+	return 1;
+}
+
 static GEM_VDI_WORD
 gem_pc_open(GEM_VDI_SCREEN *screen)
 {
 	/* a mode set throws away anything saved under an old cursor */
 	gem_cursor_save_active = 0;
 	if (ioctl(0, DCGET_GRAPH) != 0) {
-		/* no adapter access without the console graphics lock, failing here lets AES keep the workstation suspended */
+		/* the console lock owns adapter access */
 		console_locked = 0;
 		return 0;
 	}
@@ -240,7 +301,7 @@ gem_pc_copy_pixel(GEM_VDI_COORD destination_x,
 	}
 }
 
-/* screen-to-screen copy, needs matching bit alignment or returns zero for the VDI fallback, ragged edges go pixel by pixel, whole bytes via byte copy, backwards when overlapping */
+/* copy aligned screen bytes and leave ragged edges to VDI */
 GEM_VDI_WORD
 gem_pc_screen_blit(GEM_VDI_COORD dst_x, GEM_VDI_COORD dst_y,
 	GEM_VDI_COORD width, GEM_VDI_COORD height, GEM_VDI_COORD src_x,

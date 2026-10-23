@@ -13,7 +13,7 @@
 #define GEM_MENU_OBJECT_RESIDENT_HIDDEN  0U
 #define GEM_MENU_OBJECT_RESIDENT_VISIBLE 1U
 
-/* one active menu for the whole AES. channel and generation words stand in for the PD pointer, so a reused channel cant pull down a newer app's menu */
+/* one generation-safe active menu */
 typedef struct gem_menu_object_resident {
 	GEM_FAR_ADDRESS tree;
 	UWORD object_count;
@@ -33,12 +33,12 @@ VOID gem_menu_object_resident_init(GEM_MENU_OBJECT_RESIDENT *menu);
 WORD gem_menu_object_resident_tree_count(const GEM_RESOURCE_RESIDENT *resource,
 	GEM_FAR_ADDRESS tree, UWORD *object_count);
 
-/* show or hide the menu bar for one resident RSC tree. on show, checks the object extent, sets the bar to the screen width, draws through the resident VDI owner. on hide, only the matching owner/generation may clear the active menu */
+/* show or hide one checked menu tree */
 WORD gem_menu_object_resident_bar(GEM_MENU_OBJECT_RESIDENT *menu,
 	const GEM_RESOURCE_RESIDENT *resource, GEM_FAR_ADDRESS tree,
 	UWORD show, WORD owner, UWORD generation_lo, UWORD generation_hi);
 
-/* redraw the one-pixel black rule under the menu bar at row line_y. the object renderer paints the bar white, so every bar repaint must call this after */
+/* redraw the black rule under the menu */
 WORD gem_menu_object_resident_bar_rule(WORD line_y);
 
 /* generation-safe active-menu cleanup, used by synthetic EXIT and APPL_EXIT */

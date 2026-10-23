@@ -1,31 +1,31 @@
 /*
  * gem_resident_memory.h - checked client-memory access for resident GEM
  *
- * a GEM trap pins one client data segment. every classic address stays an
- * offset/segment word pair and any range outside that segment is refused
+ * every classic address stays an offset/segment word pair and any range
+ * outside the blocked clients data segment is refused
  */
 
 #ifndef ELKS_GEM_RESIDENT_MEMORY_H
 #define ELKS_GEM_RESIDENT_MEMORY_H
 
-#include "gemtrap.h"
+#include "gem_request.h"
 
 #include "gem_bindings_elks.h"
 
 /* check the half-open byte range [offset, offset + count) */
 WORD gem_resident_memory_range(UWORD offset, UWORD count, UWORD limit);
 
-/* check a classic far slot against the one DS this request pinned */
-WORD gem_resident_memory_pointer(const struct gemtrap_request *request,
+/* check a classic far slot against the clients DS */
+WORD gem_resident_memory_pointer(const struct gem_request *request,
 	GEM_BINDINGS_POINTER_SLOT pointer, UWORD count);
 
-/* copy bytes between a pinned client segment and resident near data */
+/* copy bytes between a blocked client and resident near data */
 VOID gem_resident_memory_from(UWORD client_segment, UWORD source_offset,
 	VOID *destination, UWORD count);
 VOID gem_resident_memory_to(const VOID *source, UWORD client_segment,
 	UWORD destination_offset, UWORD count);
 
-/* fill one checked client range with a byte value, the caller checks offset and count first */
+/* fill one checked client range */
 VOID gem_resident_memory_fill(UWORD client_segment,
 	UWORD destination_offset, UBYTE value, UWORD count);
 

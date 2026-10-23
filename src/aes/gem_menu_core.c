@@ -225,7 +225,7 @@ gem_resident_menu_opaque_backing(const GRECT *rectangle)
 	screen = gem_vdi_resident_screen();
 	if (!screen)
 		return FALSE;
-	gem_vdi_set_clip(screen, 0, NULL);
+	gem_vdi_set_clip(screen, 0, 0, 0, 0, 0);
 	gem_vdi_hide_cursor(screen);
 	gem_vdi_set_mode(GEM_VDI_REPLACE);
 	gem_vdi_set_foreground(screen, GEM_RESIDENT_NATIVE_WHITE);
@@ -248,7 +248,7 @@ gem_resident_menu_apply_effects(const GEM_MENU_PULL_EFFECTS *effects)
 		return FALSE;
 	target = (GEM_RESIDENT_PD *) 0;
 	if (effects->message_ready) {
-		if (effects->target_owner >= GEM_PROC_CHANNELS)
+		if (effects->target_owner >= GEM_CHANNEL_COUNT)
 			return FALSE;
 		target = gem_resident_pd_for_channel(
 			(WORD) effects->target_owner);
@@ -354,7 +354,7 @@ gem_resident_menu_detach_owner(GEM_RESIDENT_PD *pd, WORD channel)
 
 /* MENU_BAR */
 WORD
-gem_resident_menu_bar(const struct gemtrap_request *request)
+gem_resident_menu_bar(const struct gem_request *request)
 {
 	GEM_MENU_PULL_TREE view;
 	GEM_RESIDENT_PD *pd;
@@ -414,7 +414,7 @@ gem_resident_menu_bar(const struct gemtrap_request *request)
 
 /* check a menu text pointer and remember how many bytes are left after it */
 WORD
-gem_resident_menu_text(const struct gemtrap_request *request,
+gem_resident_menu_text(const struct gem_request *request,
 	const GEM_RESIDENT_PD *pd, GEM_BINDINGS_POINTER_SLOT address,
 	GEM_RESIDENT_MENU_TEXT_POINTER *pointer, UWORD *limit)
 {
@@ -439,7 +439,7 @@ gem_resident_menu_text(const struct gemtrap_request *request,
 
 /* the MENU_ICHECK through MENU_CLICK calls */
 WORD
-gem_resident_menu_pull(const struct gemtrap_request *request)
+gem_resident_menu_pull(const struct gem_request *request)
 {
 	GEM_MENU_PULL_CALL call;
 	GEM_RESIDENT_MENU_TEXT_POINTER text;

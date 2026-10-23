@@ -89,8 +89,7 @@ WORD pro_cmd(BYTE *psubcmd, BYTE *psubtail, WORD exitflag)
 	/*
 	 * A resident AES cannot return an owner-data pointer through SHEL_ENVRN
 	 * to a client with a separate ELKS data segment.  `/bin/sh` is the native
-	 * COMSPEC equivalent and is executed directly by the existing process
-	 * manager, with no conversion program or wrapper process.
+	 * COMSPEC equivalent and ELKS executes it directly.
 	 */
 	strlcpy(G.g_cmd, "/bin/sh", sizeof(G.g_cmd));
 	G.g_tail[0] = 0;
@@ -160,42 +159,15 @@ WORD pro_exec(WORD isgraf, WORD isover, LPBYTE pcmd, LPBYTE ptail)
 	WORD		ret;
 
 #if MULTIAPP
-	WORD		chnum;
-	GEM_U32_WORDS	base_hint;
-	GEM_U32_WORDS	size_hint;
-
 	if (isover != 3)
 #endif
 	graf_mouse(HGLASS, 0);
 
+	ret = shel_write(TRUE, isgraf, isover, pcmd, ptail);
 #if MULTIAPP
-	if ((isover == -1) || (isover == 2) || (isover == 3))
-	{
-	  /*
-	   * GEM/XM selected a DOS paragraph range before loading a channel.
-	   * ELKS gives every exec a kernel-owned data and stack segment, so the
-	   * historical base is deliberately zero.  The size is retained only as
-	   * an unscaled byte-count hint in two 16-bit words; it never reserves or
-	   * walks physical memory in Desktop.
-	   */
-	  base_hint = gem_u32_words(0, 0);
-	  size_hint = gem_u32_words(0, 0);
-
-	  ret = proc_create(base_hint, size_hint, 1, isgraf, &chnum);
-	  if (!ret)
-	  {
-	    fun_alert(1,STNOROOM);
-	    return(FALSE);
-	  }
-	  ret = proc_run(chnum, isgraf, isover, pcmd, ptail);
-	  if (!ret)
-	    proc_delete(chnum);
-	  if (isover==3)
-	    ret = 0;
-	}
-	else
+	if (isover == 3)
+	  ret = 0;
 #endif
-	  ret = shel_write(TRUE, isgraf, isover, pcmd, ptail);
 	if (!ret)
 	{
 	  graf_mouse(ARROW, 0);

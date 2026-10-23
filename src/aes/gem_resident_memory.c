@@ -1,9 +1,8 @@
 /*
  * gem_resident_memory.c - checked client-memory copies for resident GEM
  *
- * ELKS keeps the clients data segment pinned until the resident owner
- * replies so the server reads and writes it directly, DS/ES change
- * only for one forward byte copy, callers check the range first
+ * a socket call blocks the client while the server reads and writes its
+ * real-mode data segment, DS/ES change only for one checked byte copy
  */
 
 #include "gem_resident_memory.h"
@@ -26,7 +25,7 @@ gem_resident_memory_range(UWORD offset, UWORD count, UWORD limit)
 }
 
 WORD
-gem_resident_memory_pointer(const struct gemtrap_request *request,
+gem_resident_memory_pointer(const struct gem_request *request,
 	GEM_BINDINGS_POINTER_SLOT pointer, UWORD count)
 {
 	if (!request)

@@ -371,9 +371,11 @@ gem_vdi_text_sel_font(VOID)
 }
 
 VOID
-gem_vdi_text_init(UWORD rom_segment, UWORD rom_offset, UWORD rom_rows)
+gem_vdi_text_init(UWORD rom_segment, UWORD rom_offset,
+	UWORD rom_upper_segment, UWORD rom_upper_offset, UWORD rom_rows)
 {
-	gem_vdi_font_reset(rom_segment, rom_offset, rom_rows);
+	gem_vdi_font_reset(rom_segment, rom_offset, rom_upper_segment,
+		rom_upper_offset, rom_rows);
 	gem_vdi_text_font = gem_vdi_font_first();
 	gem_vdi_text_special = 0;
 	gem_vdi_text_rot_case = 0;

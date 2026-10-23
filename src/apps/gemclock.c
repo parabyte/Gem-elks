@@ -5,8 +5,8 @@
 
 #include "aes.h"
 
-#define CLOCK_X		80
-#define CLOCK_Y		50
+#define CLOCK_X		64
+#define CLOCK_Y		56
 #define CLOCK_W		168
 #define CLOCK_H		56
 

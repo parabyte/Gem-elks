@@ -1,8 +1,6 @@
 /* resident FreeGEM AES dispatcher for ELKS */
 /* dispatcher tables come from FreeGEM GEMSUPER.C */
 
-#include <errno.h>
-
 #include "gem_aes_internal.h"
 #include "gem_bindings_elks.h"
 #include "gem_event_resident.h"
@@ -11,7 +9,6 @@
 #include "gem_menu_object_resident.h"
 #include "gem_menu_pull_resident.h"
 #include "gem_object_resident.h"
-#include "gem_proc.h"
 #include "gem_resident_memory.h"
 #include "gem_rsc.h"
 #include "gem_scrap_resident.h"
@@ -22,7 +19,7 @@
 #include "gem_vdi_resident.h"
 #include "gem_window_resident.h"
 
-static GEM_RESIDENT_PD gem_resident_pds[GEM_PROC_CHANNELS];
+static GEM_RESIDENT_PD gem_resident_pds[GEM_CHANNEL_COUNT];
 static UBYTE gem_resident_initialized;
 GEM_MENU_OBJECT_RESIDENT gem_resident_menu;
 GEM_MENU_PULL_EFFECTS gem_resident_menu_effects;
@@ -39,7 +36,7 @@ static UWORD gem_resident_graf_update_control[C_SIZE];
 static UWORD gem_resident_graf_update_input[1];
 static UWORD gem_resident_graf_update_output[1];
 
-/* the kernel sends one XIF request at a time */
+/* one request at a time */
 UWORD control[C_SIZE];
 UWORD aes_global[G_SIZE_RESIDENT];
 UWORD int_in[I_SIZE];
@@ -54,7 +51,6 @@ static UWORD gem_resident_frame_output[1];
 static GEM_BINDINGS_POINTER_SLOT gem_resident_frame_address[1];
 
 static BYTE gem_resident_command[GEM_RESIDENT_COMMAND_BYTES];
-static BYTE gem_resident_tail[GEM_PROC_TAIL_BYTES + 1U];
 
 /* segment holding W_ACTIVE */
 UWORD
@@ -214,19 +210,6 @@ gem_resident_control_valid(UWORD opcode)
 	case GEM_SHELL_RDEF:
 	case GEM_SHELL_WDEF:
 		return control[2] >= 1 && control[3] >= 2;
-	case PROC_CREATE:
-		return control[1] >= 2 && control[2] >= 2 && control[3] >= 2;
-	case PROC_RUN:
-		return control[1] >= 3 && control[2] >= 1 && control[3] >= 2;
-	case PROC_DELETE:
-		return control[1] >= 1 && control[2] >= 1;
-	case PROC_INFO:
-	case PROC_MALLOC:
-	case PROC_MFREE:
-	case PROC_SETBLOCK:
-		return control[2] >= 1;
-	case PROC_SWITCH:
-		return control[1] >= 1 && control[2] >= 1;
 	default:
 		/* unsupported opcodes return -1 later */
 		return TRUE;
@@ -239,7 +222,7 @@ gem_resident_pd_for_channel(WORD channel)
 	GEM_RESIDENT_PD *pd;
 	UWORD count;
 
-	if (channel < 0 || channel >= GEM_PROC_CHANNELS)
+	if (channel < 0 || channel >= GEM_CHANNEL_COUNT)
 		return NULL;
 	pd = gem_resident_pds;
 	count = (UWORD) channel;
@@ -250,27 +233,25 @@ gem_resident_pd_for_channel(WORD channel)
 }
 
 GEM_RESIDENT_PD *
-gem_resident_pd_for_request(const struct gemtrap_request *request,
+gem_resident_pd_for_request(const struct gem_request *request,
 	WORD *channel)
 {
 	GEM_RESIDENT_PD *pd;
 	WORD number;
 
-	pd = gem_resident_pds;
-	number = 0;
-	while (number < GEM_PROC_CHANNELS) {
-		if (pd->state == GEM_PD_ATTACHED
-			&& pd->pid == request->pid
-			&& pd->segment == request->ds
-			&& pd->task_slot == (UBYTE) request->slot) {
-			if (channel)
-				*channel = number;
-			return pd;
-		}
-		pd++;
-		number++;
-	}
-	return NULL;
+	if (!request || request->slot >= GEM_CHANNEL_COUNT)
+		return NULL;
+	number = (WORD) request->slot;
+	pd = gem_resident_pd_for_channel(number);
+	if (!pd || pd->state != GEM_PD_ATTACHED
+		|| pd->pid != request->pid
+		|| pd->segment != request->ds
+		|| pd->generation_lo != request->generation_lo
+		|| pd->generation_hi != request->generation_hi)
+		return NULL;
+	if (channel)
+		*channel = number;
+	return pd;
 }
 
 static VOID
@@ -283,7 +264,6 @@ gem_resident_clear_pd(GEM_RESIDENT_PD *pd)
 	pd->limit = 0;
 	pd->generation_lo = 0;
 	pd->generation_hi = 0;
-	pd->task_slot = 0;
 	pd->state = GEM_PD_FREE;
 	index = 0;
 	while (index < 8U)
@@ -294,8 +274,7 @@ gem_resident_clear_pd(GEM_RESIDENT_PD *pd)
 	gem_resource_resident_init(&pd->resource);
 }
 
-/* C startup zeroes everything but the null event link needs to be ff
- * since channel zero is a real PD, so set every link by hand first time */
+	/* channel zero is live, so initialise the ff list terminators */
 VOID
 gem_resident_initialize(VOID)
 {
@@ -311,7 +290,7 @@ gem_resident_initialize(VOID)
 	if (gem_resident_initialized)
 		return;
 	pd = gem_resident_pds;
-	count = GEM_PROC_CHANNELS;
+	count = GEM_CHANNEL_COUNT;
 	while (count--)
 		gem_resident_clear_pd(pd++);
 	gem_pending_reset();
@@ -336,7 +315,7 @@ gem_resident_initialize(VOID)
 		startup_screen.screen_height = (WORD) screen_height;
 		startup_screen.frame_3d = 0;
 		(void) gem_startup_resident_configure(&startup_screen);
-		window_screen.system_owner = GEM_PROC_AES;
+		window_screen.system_owner = GEM_CHANNEL_AES;
 		window_screen.screen_width = (WORD) screen_width;
 		window_screen.screen_height = (WORD) screen_height;
 		window_screen.box_width = startup_screen.box_width;
@@ -377,7 +356,7 @@ gem_resident_nameit(GEM_RESIDENT_PD *pd, const BYTE *path)
 
 /* park one waiter for the WIND_UPDATE screen lock */
 static WORD GEM_RESIDENT_COLD
-gem_resident_update_defer(const struct gemtrap_request *request, WORD channel,
+gem_resident_update_defer(const struct gem_request *request, WORD channel,
 	UWORD output_offset)
 {
 	GEM_RESIDENT_PD *pd;
@@ -503,7 +482,7 @@ gem_resident_desktop_restore_rectangle(const GRECT *rectangle)
 	while (owned) {
 		if (gem_resident_screen_intersection(rectangle,
 				&owned->rectangle, &clipped)) {
-			gem_vdi_set_clip(screen, 0, NULL);
+			gem_vdi_set_clip(screen, 0, 0, 0, 0, 0);
 			gem_vdi_hide_cursor(screen);
 			gem_vdi_set_mode(GEM_VDI_REPLACE);
 			gem_vdi_set_foreground(screen,
@@ -638,24 +617,24 @@ gem_resident_window_apply_effects_reserved(const GEM_WINDOW_EFFECTS *effects,
 {
 	GEM_RESIDENT_PD *pd;
 	const GEM_WINDOW_MESSAGE *message;
-	UWORD reserved[GEM_PROC_CHANNELS];
+	UWORD reserved[GEM_CHANNEL_COUNT];
 	UWORD index;
 	UWORD owner;
 
 	if (!effects || effects->message_count > GEM_WINDOW_MESSAGE_COUNT)
 		return FALSE;
 	index = 0;
-	while (index < GEM_PROC_CHANNELS)
+	while (index < GEM_CHANNEL_COUNT)
 		reserved[index++] = 0;
 	if (extra_owner != NIL) {
-		if (extra_owner < 0 || extra_owner >= GEM_PROC_CHANNELS)
+		if (extra_owner < 0 || extra_owner >= GEM_CHANNEL_COUNT)
 			return FALSE;
 		reserved[(UWORD) extra_owner] = 16U;
 	}
 	message = effects->messages;
 	index = effects->message_count;
 	while (index--) {
-		if (message->owner < 0 || message->owner >= GEM_PROC_CHANNELS)
+		if (message->owner < 0 || message->owner >= GEM_CHANNEL_COUNT)
 			return FALSE;
 		owner = (UWORD) message->owner;
 		pd = gem_resident_pd_for_channel(message->owner);
@@ -689,7 +668,7 @@ gem_resident_window_apply_effects_reserved(const GEM_WINDOW_EFFECTS *effects,
 	}
 	pd = gem_resident_pds;
 	index = 0;
-	while (index < GEM_PROC_CHANNELS) {
+	while (index < GEM_CHANNEL_COUNT) {
 		if (reserved[index])
 			gem_resident_queue_progress(pd);
 		pd++;
@@ -724,7 +703,7 @@ gem_resident_graf_update_owner(GEM_RESIDENT_PD *pd, WORD channel,
 	WORD handled;
 	WORD result;
 
-	if (!pd || channel < 0 || channel >= GEM_PROC_CHANNELS)
+	if (!pd || channel < 0 || channel >= GEM_CHANNEL_COUNT)
 		return FALSE;
 	gem_resident_graf_update_control[0] = GEM_STARTUP_WIND_UPDATE;
 	gem_resident_graf_update_control[1] = 1U;
@@ -768,10 +747,7 @@ gem_resident_graf_apply_effects(GEM_RESIDENT_PD *pd, WORD channel,
 	return TRUE;
 }
 
-/* a caller tree is only accepted through the pinned client/RSC ranges,
- * the fixed alert tree only in this resident data segment. the final
- * END_UPDATE runs even when a repaint fails, so a dying form cant strand
- * the screen lock */
+/* apply checked form drawing and lock effects */
 WORD
 gem_resident_form_apply_effects(GEM_RESIDENT_PD *pd, WORD channel,
 	const GEM_FORM_EFFECTS *effects)
@@ -797,8 +773,7 @@ gem_resident_form_apply_effects(GEM_RESIDENT_PD *pd, WORD channel,
 		resident_segment = 0;
 		system_tree = FALSE;
 		if (effects->tree_kind == GEM_FORM_TREE_ALERT) {
-			/* the alert tree is GEM.RSC's but its message and
-			 * button strings point at resident text */
+			/* alert strings live in resident data */
 			resident_segment = gem_resident_data_segment();
 			system_tree = TRUE;
 			if (effects->resident_segment != resident_segment)
@@ -844,7 +819,7 @@ gem_resident_form_detach_owner(GEM_RESIDENT_PD *pd, WORD channel)
 		&gem_resident_form_effects);
 }
 
-/* erase a dying generation's XOR outline before its pinned RSC vanishes */
+/* erase a dying generation's XOR outline before its RSC vanishes */
 static WORD
 gem_resident_graf_detach_owner(GEM_RESIDENT_PD *pd, WORD channel)
 {
@@ -858,12 +833,11 @@ gem_resident_graf_detach_owner(GEM_RESIDENT_PD *pd, WORD channel)
 }
 
 static WORD
-gem_resident_attach(const struct gemtrap_request *request, WORD channel)
+gem_resident_attach(const struct gem_request *request, WORD channel)
 {
-	struct gemtrap_request attachment;
 	GEM_RESIDENT_PD *pd;
 
-	if (channel < 0 || channel >= GEM_PROC_CHANNELS)
+	if (channel < 0 || channel >= GEM_CHANNEL_COUNT)
 		return FALSE;
 	pd = gem_resident_pd_for_channel(channel);
 	if (!pd)
@@ -871,27 +845,19 @@ gem_resident_attach(const struct gemtrap_request *request, WORD channel)
 	if (pd->state != GEM_PD_FREE)
 		return FALSE;
 
-	attachment = *request;
-	attachment.ax = (UWORD) channel;
-	if (gemctl(GEMCTL_ATTACH, &attachment) != 0)
-		return FALSE;
-
 	pd->pid = request->pid;
 	pd->segment = request->ds;
 	pd->limit = request->data_limit;
 	pd->generation_lo = request->generation_lo;
 	pd->generation_hi = request->generation_hi;
-	pd->task_slot = (UBYTE) request->slot;
 	pd->state = GEM_PD_ATTACHED;
 	return TRUE;
 }
 
 static WORD
-gem_resident_detach(const struct gemtrap_request *request,
+gem_resident_detach(const struct gem_request *request,
 	GEM_RESIDENT_PD *pd, WORD channel)
 {
-	struct gemtrap_request attachment;
-
 	/* restore form/tracker/menu/window pixels while every RSC is still here */
 	if (!gem_resident_form_detach_owner(pd, channel))
 		return FALSE;
@@ -911,18 +877,13 @@ gem_resident_detach(const struct gemtrap_request *request,
 	/* the far RSC segment belongs to this exact attachment generation */
 	if (!gem_resource_resident_cleanup(&pd->resource))
 		return FALSE;
-	attachment = *request;
-	attachment.ax = (UWORD) channel;
-	attachment.generation_lo = pd->generation_lo;
-	attachment.generation_hi = pd->generation_hi;
-	if (gemctl(GEMCTL_DETACH, &attachment) != 0)
-		return FALSE;
+	(void) request;
 	gem_resident_clear_pd(pd);
 	return TRUE;
 }
 
 static WORD
-gem_resident_xbuf_init(const struct gemtrap_request *request,
+gem_resident_xbuf_init(const struct gem_request *request,
 	GEM_BINDINGS_POINTER_SLOT pointer)
 {
 	GEM_RESIDENT_XBUF xbuf;
@@ -956,46 +917,30 @@ gem_resident_xbuf_init(const struct gemtrap_request *request,
 }
 
 static WORD
-gem_resident_appl_init(const struct gemtrap_request *request)
+gem_resident_appl_init(const struct gem_request *request)
 {
 	GEM_FAR_ADDRESS desktop_tree;
 	GEM_BINDINGS_POINTER_SLOT desktop_spec;
 	GEM_RESIDENT_PD *pd;
 	GEM_VDI_SCREEN *screen;
 	WORD channel;
-	WORD mapped;
-	WORD adopted;
 	UWORD index;
 
-	adopted = FALSE;
 	pd = gem_resident_pd_for_request(request, &channel);
 	if (!pd) {
-		/* keep a launched channel or adopt a shell-started task */
-		mapped = gem_proc_channel_for_pid(request->pid);
-		if (mapped >= 2)
-			channel = mapped;
-		else if (gem_resident_pds[GEM_PROC_DESKTOP].state == GEM_PD_FREE
-			&& (addr_in[0].lo || addr_in[0].hi))
-			channel = GEM_PROC_DESKTOP;
-		else {
-			if (!gem_proc_adopt_external(request->pid, &channel))
-				return -1;
-			adopted = TRUE;
-		}
-		if (!gem_resident_attach(request, channel)) {
-			if (adopted)
-				(void) gem_proc_release_external(channel,
-					request->pid);
+		channel = (WORD) request->slot;
+		if (channel == GEM_CHANNEL_AES
+			|| channel < 0 || channel >= GEM_CHANNEL_COUNT
+			|| !gem_resident_attach(request, channel))
 			return -1;
-		}
 	}
-	if (channel == GEM_PROC_DESKTOP)
+	if (channel == GEM_CHANNEL_DESKTOP)
 		gem_resident_nameit(gem_resident_pd_for_channel(channel),
 			"DESKTOP");
 
 	/* fill in the AES global array for this client */
 	aes_global[0] = 0x0110U;
-	aes_global[1] = GEM_PROC_CHANNELS - 1;
+	aes_global[1] = GEM_CHANNEL_COUNT - 1;
 	aes_global[2] = (UWORD) channel;
 	index = 3;
 	while (index < G_SIZE_RESIDENT)
@@ -1022,8 +967,6 @@ gem_resident_appl_init(const struct gemtrap_request *request)
 		pd = gem_resident_pd_for_channel(channel);
 		if (pd)
 			(void) gem_resident_detach(request, pd, channel);
-		if (adopted)
-			(void) gem_proc_release_external(channel, request->pid);
 		return -1;
 	}
 	return channel;
@@ -1031,7 +974,7 @@ gem_resident_appl_init(const struct gemtrap_request *request)
 
 /* find an attached client by its 8-char name */
 static WORD
-gem_resident_appl_find(const struct gemtrap_request *request)
+gem_resident_appl_find(const struct gem_request *request)
 {
 	GEM_RESIDENT_PD *pd;
 	BYTE name[9];
@@ -1056,7 +999,7 @@ gem_resident_appl_find(const struct gemtrap_request *request)
 
 	pd = gem_resident_pds;
 	channel = 0;
-	while (channel < GEM_PROC_CHANNELS) {
+	while (channel < GEM_CHANNEL_COUNT) {
 		if (pd->state == GEM_PD_ATTACHED) {
 			index = 0;
 			while (index < 8U && name[index] == pd->name[index])
@@ -1073,7 +1016,7 @@ gem_resident_appl_find(const struct gemtrap_request *request)
 /* park an APPL_READ/APPL_WRITE that cant finish yet on the target PD's
  * reader or writer FIFO, the queue pump finishes it later */
 static WORD
-gem_resident_appl_defer(const struct gemtrap_request *request,
+gem_resident_appl_defer(const struct gem_request *request,
 	GEM_RESIDENT_PD *target_pd, WORD caller_channel,
 	WORD target_channel, UBYTE operation, UWORD length, UWORD output_offset)
 {
@@ -1088,7 +1031,7 @@ gem_resident_appl_defer(const struct gemtrap_request *request,
 /* APPL_READ/APPL_WRITE, one message queue per target PD. an operation
  * that cant finish yet is parked and finished later */
 static WORD
-gem_resident_appl_rdwr(const struct gemtrap_request *request,
+gem_resident_appl_rdwr(const struct gem_request *request,
 	UBYTE operation, UWORD output_offset)
 {
 	GEM_PENDING *caller_pending;
@@ -1133,8 +1076,7 @@ gem_resident_appl_rdwr(const struct gemtrap_request *request,
 		target_channel, operation, length, output_offset);
 }
 
-/* take one dying PD out of everything. cancelling its parked trap
- * releases the segment pin, writers waiting on its queue get a failure */
+/* take one dying PD out of everything */
 static WORD
 gem_resident_drop_channel(WORD channel)
 {
@@ -1146,9 +1088,7 @@ gem_resident_drop_channel(WORD channel)
 
 	result = TRUE;
 	pd = gem_resident_pd_for_channel(channel);
-	/* a held FORM or GRAF request may own visible pixels and one
-	 * WIND_UPDATE depth, restore both before GEMCTL_CANCEL unpins the
-	 * request DS */
+	/* restore visible state before dropping the request */
 	if (pd && !gem_resident_form_detach_owner(pd, channel))
 		result = FALSE;
 	if (pd && !gem_resident_graf_detach_owner(pd, channel))
@@ -1159,7 +1099,7 @@ gem_resident_drop_channel(WORD channel)
 	 * queues gets a failure. a waiter is unlinked from whichever FIFO it
 	 * sits on first */
 	index = 0;
-	while (index < GEM_PROC_CHANNELS) {
+	while (index < GEM_CHANNEL_COUNT) {
 		pending = gem_pending_at(index);
 		if (pending->state == GEM_PENDING_WAITING
 			&& (index == channel
@@ -1203,7 +1143,7 @@ gem_resident_drop_channel(WORD channel)
 }
 
 static WORD
-gem_resident_copy_command(const struct gemtrap_request *request,
+gem_resident_copy_command(const struct gem_request *request,
 	GEM_BINDINGS_POINTER_SLOT pointer)
 {
 	UWORD available;
@@ -1225,37 +1165,6 @@ gem_resident_copy_command(const struct gemtrap_request *request,
 		index++;
 	}
 	return FALSE;
-}
-
-/* copy a classic command tail from the caller */
-static WORD
-gem_resident_copy_tail(const struct gemtrap_request *request,
-	GEM_BINDINGS_POINTER_SLOT pointer, BYTE **tail)
-{
-	UBYTE length;
-	UWORD bytes;
-
-	if (!tail)
-		return FALSE;
-	if (!pointer.lo && !pointer.hi) {
-		*tail = NULL;
-		return TRUE;
-	}
-	if (pointer.hi != request->ds
-		|| !gem_resident_memory_range(pointer.lo, 1U,
-			request->data_limit))
-		return FALSE;
-	gem_resident_memory_from(request->ds, pointer.lo, &length, 1U);
-	if (length > GEM_PROC_TAIL_BYTES)
-		return FALSE;
-	bytes = (UWORD) length + 1U;
-	if (!gem_resident_memory_range(pointer.lo, bytes,
-			request->data_limit))
-		return FALSE;
-	gem_resident_memory_from(request->ds, pointer.lo,
-		gem_resident_tail, bytes);
-	*tail = gem_resident_tail;
-	return TRUE;
 }
 
 /* fill the five resource words in the AES global array from this PD's
@@ -1283,11 +1192,9 @@ gem_resident_resource_global(GEM_RESIDENT_PD *pd)
 	return TRUE;
 }
 
-/* a replacement address can only name the caller's pinned data segment
- * or its resident resource segment. null and GEM's ffff:ffff sentinel
- * pass through unchanged */
+/* accept only live client or resource addresses */
 static WORD
-gem_resident_resource_address_valid(const struct gemtrap_request *request,
+gem_resident_resource_address_valid(const struct gem_request *request,
 	const GEM_RESIDENT_PD *pd, GEM_FAR_ADDRESS address)
 {
 	if ((!address.lo && !address.hi)
@@ -1303,11 +1210,9 @@ gem_resident_resource_address_valid(const struct gemtrap_request *request,
 	return FALSE;
 }
 
-/* the scrap-directory calls. the directory is one AES-wide string so no
- * PD is involved, only the path buffer crosses the trap and its checked
- * against the pinned client DS like every other far slot */
+/* scrap directory calls */
 static WORD
-gem_resident_scrap(const struct gemtrap_request *request, WORD opcode)
+gem_resident_scrap(const struct gem_request *request, WORD opcode)
 {
 	BYTE path[GEM_SCRAP_PATH_MAX + 1U];
 	UWORD count;
@@ -1340,7 +1245,7 @@ gem_resident_scrap(const struct gemtrap_request *request, WORD opcode)
 
 /* the resource calls (load, free, get/set address, fix), per PD */
 static WORD
-gem_resident_resource(const struct gemtrap_request *request, WORD opcode)
+gem_resident_resource(const struct gem_request *request, WORD opcode)
 {
 	GEM_RESOURCE_METRICS metrics;
 	GEM_RESIDENT_PD *pd;
@@ -1418,7 +1323,7 @@ gem_resident_resource(const struct gemtrap_request *request, WORD opcode)
 
 /* the OBJC_* object calls */
 static WORD
-gem_resident_object(const struct gemtrap_request *request)
+gem_resident_object(const struct gem_request *request)
 {
 	GEM_OBJECT_RESIDENT_CALL call;
 	GEM_RESIDENT_PD *pd;
@@ -1443,7 +1348,7 @@ gem_resident_object(const struct gemtrap_request *request)
 
 /* park one modal form, the tick finishes it when the form settles */
 static WORD
-gem_resident_form_defer(const struct gemtrap_request *request,
+gem_resident_form_defer(const struct gem_request *request,
 	WORD channel, UWORD output_offset)
 {
 	if (!gem_pending_park(request, channel, GEM_PENDING_FORM, channel,
@@ -1455,7 +1360,7 @@ gem_resident_form_defer(const struct gemtrap_request *request,
 /* the OBJC_EDIT and FORM calls. interactive ones hold on to the
  * delivered request */
 static WORD
-gem_resident_form(const struct gemtrap_request *request, UWORD output_offset)
+gem_resident_form(const struct gem_request *request, UWORD output_offset)
 {
 	GEM_FORM_CALL call;
 	GEM_RESIDENT_PD *pd;
@@ -1503,7 +1408,7 @@ gem_resident_form(const struct gemtrap_request *request, UWORD output_offset)
 /* check every client range before applying the startup manager's
  * effects, so SHEL_GET and USER_DEF mouse changes stay all-or-nothing */
 static WORD
-gem_resident_startup(const struct gemtrap_request *request, UWORD output_offset)
+gem_resident_startup(const struct gem_request *request, UWORD output_offset)
 {
 	GEM_STARTUP_CALL call;
 	GEM_STARTUP_EFFECTS effects;
@@ -1592,7 +1497,7 @@ gem_resident_startup(const struct gemtrap_request *request, UWORD output_offset)
 /* the SHEL_* calls, with path lookup and program launch done by ELKS
  * system calls */
 static WORD
-gem_resident_shell(const struct gemtrap_request *request)
+gem_resident_shell(const struct gem_request *request)
 {
 	GEM_SHELL_CALL call;
 	GEM_RESIDENT_PD *pd;
@@ -1619,7 +1524,7 @@ gem_resident_shell(const struct gemtrap_request *request)
 
 /* the WIND_* window calls */
 static WORD
-gem_resident_window(const struct gemtrap_request *request)
+gem_resident_window(const struct gem_request *request)
 {
 	GEM_FAR_ADDRESS address;
 	GEM_RESIDENT_PD *pd;
@@ -1627,7 +1532,6 @@ gem_resident_window(const struct gemtrap_request *request)
 	WORD channel;
 	WORD handled;
 	WORD result;
-	WORD top_owner;
 
 	pd = gem_resident_pd_for_request(request, &channel);
 	if (!pd)
@@ -1654,25 +1558,12 @@ gem_resident_window(const struct gemtrap_request *request)
 		return -1;
 	if (!gem_resident_window_apply_effects(&gem_resident_window_effects))
 		return -1;
-	/* route input to the top owner */
-	if (result
-		&& (control[0] == GEM_WINDOW_WIND_OPEN
-			|| control[0] == GEM_WINDOW_WIND_CLOSE
-			|| (control[0] == GEM_WINDOW_WIND_SET
-				&& (int_in[1] == GEM_WINDOW_WF_TOP
-					|| int_in[1] == GEM_WINDOW_WF_SIZTOP)))) {
-		top_owner = gem_window_resident_top_owner(&gem_resident_windows);
-		if (top_owner >= 0 && top_owner < GEM_PROC_CHANNELS
-			&& top_owner != GEM_PROC_AES
-			&& top_owner != gem_proc_foreground_channel())
-			(void) proc_switch(top_owner);
-	}
 	return result;
 }
 
 /* park one held GRAF interaction for the tick to finish */
 static WORD
-gem_resident_graf_defer(const struct gemtrap_request *request,
+gem_resident_graf_defer(const struct gem_request *request,
 	WORD channel, UWORD output_offset)
 {
 	if (!gem_pending_park(request, channel, GEM_PENDING_GRAF, channel,
@@ -1683,7 +1574,7 @@ gem_resident_graf_defer(const struct gemtrap_request *request,
 
 /* the GRAF tracker calls (rubber box, drag box, etc) */
 static WORD
-gem_resident_graf(const struct gemtrap_request *request, UWORD output_offset)
+gem_resident_graf(const struct gem_request *request, UWORD output_offset)
 {
 	GEM_GRAF_CALL call;
 	GEM_GRAF_EFFECTS cleanup_effects;
@@ -1727,7 +1618,7 @@ gem_resident_graf(const struct gemtrap_request *request, UWORD output_offset)
 	if (result == GEM_AES_RESIDENT_DEFERRED)
 		return result;
 
-	/* a channel never has a second trap, unwind pixels and lock if it does */
+	/* unwind a bad second call */
 	gem_graf_resident_detach((UWORD) channel, pd->generation_lo,
 		pd->generation_hi, &cleanup_effects);
 	__asm__ volatile ("movw %0,%%ds"::"r" (owner_segment):"memory");
@@ -1737,7 +1628,7 @@ gem_resident_graf(const struct gemtrap_request *request, UWORD output_offset)
 
 /* park one delivered event call for the tick to finish */
 static WORD
-gem_resident_event_defer(const struct gemtrap_request *request,
+gem_resident_event_defer(const struct gem_request *request,
 	WORD channel, UWORD output_offset)
 {
 	if (!gem_pending_park(request, channel, GEM_PENDING_EVENT, channel,
@@ -1748,7 +1639,7 @@ gem_resident_event_defer(const struct gemtrap_request *request,
 
 /* the EVNT_* event calls */
 static WORD
-gem_resident_event(const struct gemtrap_request *request, UWORD output_offset)
+gem_resident_event(const struct gem_request *request, UWORD output_offset)
 {
 	GEM_EVENT_CALL call;
 	GEM_EVENT_EFFECTS effects;
@@ -1790,7 +1681,7 @@ gem_resident_event(const struct gemtrap_request *request, UWORD output_offset)
 
 /* dispatch one AES opcode */
 static WORD
-crysbind1(const struct gemtrap_request *request, WORD opcode,
+crysbind1(const struct gem_request *request, WORD opcode,
 	UWORD output_offset)
 {
 	GEM_RESIDENT_PD *pd;
@@ -1821,8 +1712,6 @@ crysbind1(const struct gemtrap_request *request, WORD opcode,
 			return -1;
 		if (!gem_resident_detach(request, pd, channel))
 			return -1;
-		/* launched children stay until waitpid */
-		(void) gem_proc_release_external(channel, request->pid);
 		return TRUE;
 	case GEM_EVENT_EVNT_KEYBD:
 	case GEM_EVENT_EVNT_BUTTON:
@@ -1909,78 +1798,11 @@ crysbind1(const struct gemtrap_request *request, WORD opcode,
 	}
 }
 
-/* the process-manager opcodes, everything else goes to crysbind1 */
-static WORD
-crysbind(const struct gemtrap_request *request, WORD opcode,
-	UWORD output_offset)
-{
-	BYTE *tail;
-	GEM_RESIDENT_PD *pd;
-	WORD result;
-
-	if (opcode < PROC_CREATE
-		|| (opcode >= GEM_GRAF_RUBBOX && opcode <= GEM_GRAF_MKSTATE)
-		|| opcode == GEM_STARTUP_GRAF_HANDLE
-		|| opcode == GEM_STARTUP_GRAF_MOUSE
-		|| opcode == GEM_STARTUP_WIND_UPDATE
-		|| opcode == GEM_STARTUP_WIND_CALC
-		|| (opcode >= GEM_SHELL_READ && opcode <= GEM_SHELL_WDEF)
-		|| (opcode >= GEM_WINDOW_WIND_CREATE
-			&& opcode <= GEM_WINDOW_WIND_FIND)
-		|| (opcode >= RSRC_LOAD && opcode <= RSRC_OBFIX))
-		return crysbind1(request, opcode, output_offset);
-	if (!gem_resident_pd_for_request(request, NULL))
-		return -1;
-
-	switch (opcode) {
-	case PROC_CREATE:
-		result = proc_create(addr_in[0], addr_in[1], (WORD) int_in[0],
-			(WORD) int_in[1], (WORD *) &int_out[1]);
-		if (result && (WORD) int_out[1] >= 2) {
-			pd = gem_resident_pd_for_channel((WORD) int_out[1]);
-			if (pd)
-				gem_resident_clear_pd(pd);
-		}
-		return result;
-	case PROC_RUN:
-		if (!gem_resident_copy_command(request, addr_in[0])
-			|| !gem_resident_copy_tail(request, addr_in[1], &tail))
-			return -1;
-		pd = gem_resident_pd_for_channel((WORD) int_in[0]);
-		if (!pd || pd->state != GEM_PD_FREE)
-			return -1;
-		gem_resident_nameit(pd, gem_resident_command);
-		result = proc_run((WORD) int_in[0], (WORD) int_in[1],
-			(WORD) int_in[2], gem_resident_command, tail);
-		if (!result)
-			gem_resident_nameit(pd, NULL);
-		return result;
-	case PROC_DELETE:
-		result = proc_delete((WORD) int_in[0]);
-		if (result) {
-			pd = gem_resident_pd_for_channel((WORD) int_in[0]);
-			if (pd && pd->state == GEM_PD_FREE)
-				gem_resident_clear_pd(pd);
-		}
-		return result;
-	case PROC_INFO:
-	case PROC_MALLOC:
-	case PROC_MFREE:
-	case PROC_SETBLOCK:
-		/* ELKS owns process memory. */
-		return -1;
-	case PROC_SWITCH:
-		return proc_switch((WORD) int_in[0]);
-	default:
-		return -1;
-	}
-}
-
 /* copy the caller's parameter arrays in, dispatch, then copy back only
  * the declared outputs. the global array gets copied too since it lives
  * in a different ELKS segment */
 static WORD
-xif(struct gemtrap_request *request)
+xif(struct gem_request *request)
 {
 	GEM_BINDINGS_AESPB parameter_block;
 	UWORD input_bytes;
@@ -2056,7 +1878,7 @@ xif(struct gemtrap_request *request)
 	}
 
 	__asm__ volatile ("movw %%ds,%0":"=r" (owner_segment));
-	result = crysbind(request, (WORD) control[0],
+	result = crysbind1(request, (WORD) control[0],
 		parameter_block.intout.lo);
 	__asm__ volatile ("movw %0,%%ds"::"r" (owner_segment):"memory");
 	int_out[0] = (UWORD) result;
@@ -2074,7 +1896,7 @@ xif(struct gemtrap_request *request)
 }
 
 WORD
-gem_aes_resident_request(struct gemtrap_request *request)
+gem_aes_resident_request(struct gem_request *request)
 {
 	gem_resident_initialize();
 	if (!request)
@@ -2088,7 +1910,7 @@ gem_aes_resident_request(struct gemtrap_request *request)
 }
 
 WORD
-gem_aes_resident_application(const struct gemtrap_request *request)
+gem_aes_resident_application(const struct gem_request *request)
 {
 	WORD channel;
 
@@ -2099,7 +1921,7 @@ gem_aes_resident_application(const struct gemtrap_request *request)
 }
 
 WORD
-gem_aes_resident_ready(struct gemtrap_request *request)
+gem_aes_resident_ready(struct gem_request *request)
 {
 	gem_resident_initialize();
 	if (!request)
@@ -2107,18 +1929,17 @@ gem_aes_resident_ready(struct gemtrap_request *request)
 	return gem_pending_take_ready(request);
 }
 
-/* tear down the exact kernel attachment */
+/* tear down one exact socket attachment */
 WORD
-gem_aes_resident_exit(struct gemtrap_request *request)
+gem_aes_resident_exit(struct gem_request *request)
 {
 	GEM_RESIDENT_PD *pd;
 	WORD channel;
 	WORD matches;
-	WORD result;
 
 	gem_resident_initialize();
-	if (!request || request->cx != GEMTRAP_CX_EXIT
-		|| request->ax >= GEM_PROC_CHANNELS)
+	if (!request || request->cx != GEM_REQUEST_EXIT
+		|| request->ax >= GEM_CHANNEL_COUNT)
 		return FALSE;
 	channel = (WORD) request->ax;
 	pd = gem_resident_pd_for_channel(channel);
@@ -2127,11 +1948,10 @@ gem_aes_resident_exit(struct gemtrap_request *request)
 	matches = pd->state == GEM_PD_ATTACHED
 		&& pd->pid == request->pid
 		&& pd->segment == request->ds
-		&& pd->task_slot == (UBYTE) request->slot
+		&& request->slot == (UWORD) channel
 		&& pd->generation_lo == request->generation_lo
 		&& pd->generation_hi == request->generation_hi;
 	if (matches) {
-		(void) gem_proc_release_external(channel, request->pid);
 		if (!gem_resident_drop_channel(channel))
 			return FALSE;
 		gem_resident_menu_detach_owner(pd, channel);
@@ -2141,10 +1961,6 @@ gem_aes_resident_exit(struct gemtrap_request *request)
 			return FALSE;
 	}
 
-	/* the kernel owns the segment pin */
-	result = gemctl(GEMCTL_DETACH, request);
-	if (result != 0 && errno != ESRCH)
-		return FALSE;
 	if (matches) {
 		gem_shell_resident_detach((UWORD) channel,
 			pd->generation_lo, pd->generation_hi);
@@ -2165,7 +1981,7 @@ gem_aes_resident_active(VOID)
 
 	gem_resident_initialize();
 	pd = gem_resident_pds;
-	count = GEM_PROC_CHANNELS;
+	count = GEM_CHANNEL_COUNT;
 	while (count--) {
 		if (pd->state != GEM_PD_FREE)
 			return TRUE;

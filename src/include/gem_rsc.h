@@ -40,7 +40,7 @@
 #define GEM_RSC_IB_PTEXT		8U
 #define GEM_RSC_BI_PDATA		0U
 
-/* one loaded image: the paragraph segment its bytes start in and how many there are. offsets are always from the start */
+/* one loaded resource image */
 typedef struct gem_rsc_image {
 	UWORD segment;
 	UWORD bytes;
@@ -72,15 +72,15 @@ VOID gem_rsc_header(const GEM_RSC_IMAGE *image, RSHDR *header);
 /* copy one RSHDR field by field, so no packing assumption is made */
 VOID gem_rsc_header_copy(RSHDR *destination, const RSHDR *source);
 
-/* base + index * size, refused when the index is past count or the math would wrap */
+/* checked table offset */
 WORD gem_rsc_index_offset(UWORD base, UWORD index, UWORD count, UWORD size,
 	UWORD *offset);
 
-/* resolve one R_* selector and index against a loaded image. returns FALSE and an invalid address when the selector, index or stored pointer isnt usable */
+/* resolve one R_* selector and index */
 WORD gem_rsc_address(const GEM_RSC_IMAGE *image, UWORD type, UWORD index,
 	GEM_FAR_ADDRESS *address);
 
-/* copy a nul-terminated string out of a loaded image into near memory. returns the length without the terminator, or -1 */
+/* copy one resource string into near memory */
 WORD gem_rsc_string(const GEM_RSC_IMAGE *image, UWORD offset, BYTE *buffer,
 	UWORD size);
 

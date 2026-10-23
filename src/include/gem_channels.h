@@ -1,0 +1,11 @@
+/* AES channels */
+
+#ifndef ELKS_GEM_CHANNELS_H
+#define ELKS_GEM_CHANNELS_H
+
+#define GEM_CHANNEL_COUNT	6
+#define GEM_CHANNEL_DESKTOP	0
+#define GEM_CHANNEL_AES		1
+#define GEM_CHANNEL_FIRST_APP	2
+
+#endif /* ELKS_GEM_CHANNELS_H */

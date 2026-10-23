@@ -1,11 +1,4 @@
-/*
- * gem_object_resident.h - GEM object manager for the resident AES
- *
- * takes the classic AES control/int_in/int_out/addr_in arrays directly. an
- * OBJECT tree stays in its relocated RSC segment or the calling task's pinned
- * data segment. coord addition wraps as an 8086 word, pointer ranges never
- * wrap and are rejected before any far access
- */
+/* resident AES object manager */
 
 #ifndef ELKS_GEM_OBJECT_RESIDENT_H
 #define ELKS_GEM_OBJECT_RESIDENT_H
@@ -70,7 +63,7 @@ typedef BYTE GEM_OBJECT_ICONBLK_MUST_BE_34_BYTES
 typedef BYTE GEM_OBJECT_BITBLK_MUST_BE_14_BYTES
 	[(sizeof(BITBLK) == 14) ? 1 : -1];
 
-/* one dispatch, after the arrays were copied. client_segment and client_limit are the pinned request DS and its exclusive byte limit. resident_segment is zero for client calls, the AES passes its own DS only for the resident W_ACTIVE tree and that segment is never accepted from an app trap */
+/* one call with checked segments */
 typedef struct gem_object_resident_call {
 	const GEM_RESOURCE_RESIDENT *resource;
 	UWORD client_segment;
@@ -82,7 +75,7 @@ typedef struct gem_object_resident_call {
 	const GEM_BINDINGS_POINTER_SLOT *addr_in;
 } GEM_OBJECT_RESIDENT_CALL;
 
-/* dispatch OBJC_ADD, DRAW, FIND, OFFSET, ORDER and CHANGE. a known call with bad args returns FALSE with handled TRUE, an unknown selector leaves handled FALSE so the next manager can take it */
+/* dispatch the supported OBJC calls */
 WORD gem_object_resident_dispatch(const GEM_OBJECT_RESIDENT_CALL *call,
 	WORD *handled);
 

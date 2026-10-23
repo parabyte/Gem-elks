@@ -61,7 +61,7 @@
 #define GEM_SYSTEM_STOPBB		2U
 #define GEM_SYSTEM_MICE00		3U
 
-/* load GEM.RSC once. the AES cant run without it: the alert and file selector trees, the alert and error text, the mouse forms and the built-in paths all live there and arent duplicated anywhere in the resident */
+/* load the resident GEM.RSC image */
 WORD gem_system_resource_load(VOID);
 
 /* release it at shutdown */
@@ -74,7 +74,7 @@ const GEM_RESOURCE_RESIDENT *gem_system_resource(VOID);
 WORD gem_system_resource_gaddr(UWORD type, UWORD index,
 	GEM_FAR_ADDRESS *address);
 
-/* copy one free string into a resident buffer. returns the length without the terminator, or -1 when the string isnt there */
+/* copy one GEM.RSC free string */
 WORD gem_system_resource_string(UWORD index, BYTE *buffer, UWORD size);
 
 #endif				/* ELKS_GEM_SYSTEM_RESOURCE_H */

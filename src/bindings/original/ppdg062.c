@@ -14,7 +14,7 @@ rsrc_gaddr(rstype, rsid, paddr)
 	RS_TYPE = rstype;
 	RS_INDEX = rsid;
 	gem_if(RSRC_GADDR);
-#if GEM_TRAP_FAR_DATA
+#if GEM_FAR_DATA
 	/*
 	 * `paddr` is a near pointer to the caller's four-byte far-pointer
 	 * variable.  Copy the original offset and segment words into that

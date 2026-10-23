@@ -1684,16 +1684,12 @@ gem_object_find(const GEM_OBJECT_CONTEXT *context, WORD current,
 static VOID
 gem_object_set_clip(GEM_OBJECT_CONTEXT *context, const UWORD *input)
 {
-	GEM_VDI_RECT clip;
-
-	clip.x = (WORD) input[2];
-	clip.y = (WORD) input[3];
-	clip.width = (WORD) input[4];
-	clip.height = (WORD) input[5];
-	if (clip.width > 0 && clip.height > 0)
-		gem_vdi_set_clip(context->screen, 1, &clip);
+	if ((WORD) input[4] > 0 && (WORD) input[5] > 0)
+		gem_vdi_set_clip(context->screen, 1,
+			(WORD) input[2], (WORD) input[3],
+			(WORD) input[4], (WORD) input[5]);
 	else
-		gem_vdi_set_clip(context->screen, 0, (const GEM_VDI_RECT *) 0);
+		gem_vdi_set_clip(context->screen, 0, 0, 0, 0, 0);
 }
 
 static WORD

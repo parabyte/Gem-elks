@@ -19,7 +19,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static GEM_FORM_PD gem_form_pds[GEM_FORM_PD_COUNT];
+static GEM_FORM_PD gem_form_pds[GEM_CHANNEL_COUNT];
 
 /*
  * an ia16 far pointer is just two words like a GEM pointer slot, only
@@ -42,7 +42,7 @@ gem_form_pd_at(UWORD owner)
 {
 	GEM_FORM_PD *pd;
 
-	if (owner >= GEM_FORM_PD_COUNT)
+	if (owner >= GEM_CHANNEL_COUNT)
 		return (GEM_FORM_PD *) 0;
 	pd = gem_form_pds;
 	while (owner--)
@@ -1643,7 +1643,7 @@ gem_form_resident_input(const GEM_FORM_INPUT *input, GEM_FORM_EFFECTS *effects)
 	if (!effects)
 		return FALSE;
 	gem_form_clear_effects(effects);
-	if (!input || input->owner >= GEM_FORM_PD_COUNT)
+	if (!input || input->owner >= GEM_CHANNEL_COUNT)
 		return FALSE;
 	pd = gem_form_pd_at(input->owner);
 	if (!gem_form_pd_matches(pd, input->generation_lo, input->generation_hi)
@@ -1754,7 +1754,7 @@ gem_form_resident_reset(VOID)
 	UWORD count;
 
 	pd = gem_form_pds;
-	count = GEM_FORM_PD_COUNT;
+	count = GEM_CHANNEL_COUNT;
 	while (count--)
 		gem_form_clear_pd(pd++);
 	gem_form_alert_reset();

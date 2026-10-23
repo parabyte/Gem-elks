@@ -1,116 +1,63 @@
-Building and installing GEM for ELKS
-====================================
+Building GEM for ELKS
+=====================
 
 Requirements
 ------------
 
-Use an ELKS source checkout with its ia16 toolchain built.  The included
-kernel patch targets real-mode IBM PC builds; CONFIG_GEM_TRAP is not offered
-for the ELKS 286 protected-mode configuration.
+Use a stock ELKS checkout with the ia16 toolchain built.  No ELKS source,
+kernel, or libc patch is required.
 
-1. Apply the kernel/libc integration
-------------------------------------
+The IBM PC configuration needs:
 
-From this GEM repository:
+  CONFIG_UNIX=y
 
-  make -f Makefile.elks patch-elks ELKS_ROOT=/path/to/elks
+Networking applications also need:
 
-This runs git apply --check before changing the ELKS tree and is safe to run a
-second time.  The patch adds:
+  CONFIG_INET=y
 
-  * a dynamically installed INT EFh vector with the GEMAES signature;
-  * syscall 65, gemctl(), for REGISTER/NEXT/REPLY/CANCEL/ATTACH/DETACH;
-  * one fixed broker record per ELKS task, with no kernel allocation;
-  * data-segment references held while a request or attachment is live; and
-  * exec/exit callbacks so stale client memory is detached deterministically;
-  * O_NONBLOCK IPv4 connect completion for the IRC event loop.
+Build
+-----
 
-2. Configure and rebuild ELKS
------------------------------
-
-In the ELKS tree:
-
-  . ./env.sh
-  make menuconfig
-
-Under "Kernel settings", enable:
-
-  GEM INT EF resident-service broker
-
-This writes CONFIG_GEM_TRAP=y.  Rebuild at least libc and the kernel so both
-the gemctl userspace stub and broker are present:
-
-  make libc kernel
-
-For a complete target/image rebuild, use "make all" instead.
-
-3. Build GEM
-------------
-
-Back in this repository:
+From this repository:
 
   make -f Makefile.elks ELKS_ROOT=/path/to/elks -j8 all
 
-The build stops early with a clear message if the patched public kernel header
-is missing.  A successful build creates six Linux-8086 A_EXEC files under
-build/bin and linker maps under build/maps.
+The build creates:
 
-Useful verification commands are:
+  build/bin/gem
+  build/bin/gemdesk
+  build/bin/gemclock
+  build/bin/gemcalc
+  build/bin/gemview
+  build/bin/gemirc
 
-  file build/bin/*
+The resident executable has two 64 KiB code banks.  Check them with:
+
   grep -E '^\.text|^\.fartext' build/maps/gem.map
+
+Run the IRC model check with:
+
   make -f Makefile.elks check-irc
 
-The resident binary must fit below both 64 KiB code-bank limits.  Do not enable
-LTO with the currently supported ia16 toolchain; its ELKS multilib flags are
-not compatible with the old LTO wrapper.
-
-4. Install and rebuild the ELKS image
--------------------------------------
+Install
+-------
 
   make -f Makefile.elks ELKS_ROOT=/path/to/elks \
       DESTDIR=/path/to/elks/target install
 
-This installs:
+This installs the six executables in /bin and the resources in /lib/gemsys.
+System text uses the resident PC BIOS font, so no font files are installed.
+Build the ELKS image normally after installation.
 
-  /bin/gem
-  /bin/gemdesk
-  /bin/gemclock
-  /bin/gemcalc
-  /bin/gemview
-  /bin/gemirc
-  /lib/gemsys/gem.rsc
-  /lib/gemsys/desktop.rsc
-  /lib/gemsys/desktop.inf
-  /lib/gemsys/deskhi.icn
-  /lib/gemsys/desklo.icn
-  /lib/gemsys/sysfont.08
-  /lib/gemsys/sysfont.14
-  /lib/gemsys/sysfont.16
+Run
+---
 
-Then regenerate the configured ELKS image from the ELKS tree:
-
-  make image
-
-5. Runtime check
-----------------
-
-Boot the rebuilt kernel and run:
+Boot ELKS and run:
 
   /bin/gem
 
-GEM starts /bin/gemdesk.  Launch Clock and Calculator without closing Desktop;
-both should remain live and continue receiving AES timer events.  Bringing a
-window to the top changes only GEM's input-owner tag; ELKS remains the process
-scheduler throughout.
-
-Start /bin/gemirc and connect with its dialog.  Open a query, switch buffers,
-and leave Clock running beside it.  GemIRC uses ELKS socket calls directly.
-
-If a client reports that AES is absent, verify that the running kernel has
-CONFIG_GEM_TRAP=y and that /bin/gem is still registered.  If the final GEM
-link reports an undefined gemctl symbol, rebuild and install the patched ELKS
-libc with "make libc".
+GEM starts Desktop.  Launch Clock, Calculator, GemView, or GemIRC from Desktop.
+ELKS schedules every process.  Closing one app does not stop the others.
 
 Cleaning
 --------

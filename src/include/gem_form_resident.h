@@ -13,10 +13,8 @@
 #ifndef ELKS_GEM_FORM_RESIDENT_H
 #define ELKS_GEM_FORM_RESIDENT_H
 
+#include "gem_channels.h"
 #include "gem_object_resident.h"
-
-/* GEM/XM has twelve logical process channels */
-#define GEM_FORM_PD_COUNT                 6U
 
 /* the GEM form selectors */
 #define GEM_FORM_OBJC_EDIT                46U
@@ -70,7 +68,7 @@ typedef struct gem_form_rectangle {
 	WORD height;
 } GEM_FORM_RECTANGLE;
 
-/* one call, after the arrays were copied from a pinned client. resident_segment is the trusted AES DS, used only for the fixed alert tree, an app addr_in value is never accepted there */
+/* one copied call with checked segments */
 typedef struct gem_form_call {
 	UWORD owner;
 	UWORD generation_lo;
@@ -99,7 +97,7 @@ typedef struct gem_form_input {
 	UBYTE key_ready;
 } GEM_FORM_INPUT;
 
-/* draw_tree names the caller or fixed alert tree for gem_resident_draw_object_tree(). redraw_background asks for a Desktop/window/menu repaint after FMD_FINISH or a dismissed alert. begin/end_update use the one WIND_UPDATE nesting count owned by gem_startup_resident */
+/* form drawing and window-lock effects */
 typedef struct gem_form_effects {
 	GEM_BINDINGS_POINTER_SLOT tree;
 	GEM_FORM_RECTANGLE rectangle;
@@ -118,7 +116,7 @@ typedef struct gem_form_completion {
 	UWORD output_count;
 	UWORD int_out[GEM_FORM_OUTPUT_WORDS];
 	GEM_FORM_EFFECTS effects;
-	/* FSEL_INPUT also hands back two strings. the caller does the copy since only it still holds the live request, and the two slots were checked against that client when the selector opened */
+	/* FSEL_INPUT also returns path and name */
 	UBYTE fsel;
 	GEM_BINDINGS_POINTER_SLOT fsel_path;
 	GEM_BINDINGS_POINTER_SLOT fsel_name;
@@ -127,15 +125,15 @@ typedef struct gem_form_completion {
 /* clear all fixed PD interaction state and the alert tree */
 VOID gem_form_resident_reset(VOID);
 
-/* the path and file name a finished FSEL_INPUT settled on. only valid for the completion that reported fsel */
+/* copy a completed FSEL_INPUT path and name */
 VOID gem_form_resident_fsel_result(BYTE *path, UWORD path_size,
 	BYTE *name, UWORD name_size);
 
-/* dispatch OBJC_EDIT and FORM_DO through FORM_BUTTON. interactive FORM_DO, FORM_ALERT and FORM_ERROR return DEFERRED, the rest finish at once. unknown selector leaves handled FALSE, a known call with bad args sets handled TRUE and returns FALSE */
+/* dispatch object and form calls */
 WORD gem_form_resident_dispatch(const GEM_FORM_CALL *call,
 	GEM_FORM_EFFECTS *effects, WORD *handled);
 
-/* feed in one physical sample. alert highlighting may ask for one fixed-tree redraw in effects. TRUE means an active form used up the sample */
+/* feed one physical sample to the active form */
 WORD gem_form_resident_input(const GEM_FORM_INPUT *input,
 	GEM_FORM_EFFECTS *effects);
 

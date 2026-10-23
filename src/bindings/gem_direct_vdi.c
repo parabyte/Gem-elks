@@ -1,4 +1,4 @@
-/* direct VDI bindings missing from the pinned import */
+/* extra VDI bindings */
 
 #include "ppdgem.h"
 #include "ppdv0.h"

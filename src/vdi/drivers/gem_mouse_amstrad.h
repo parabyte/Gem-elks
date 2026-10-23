@@ -11,11 +11,11 @@
 /* clear the hardware counters and forget button state */
 void gem_mouse_amstrad_reset(void);
 
-/* read and clear the movement counters, nonzero if anything moved, delta_x and delta_y in screen coords, call once per tick */
+/* read and clear the movement counters */
 GEM_VDI_WORD gem_mouse_amstrad_poll(GEM_VDI_COORD *delta_x,
 	GEM_VDI_COORD *delta_y);
 
-/* Amstrad buttons arrive as keyboard codes not via the mouse port, nonzero when the byte was a button code and consumed */
+/* consume one Amstrad mouse-button key code */
 GEM_VDI_WORD gem_mouse_amstrad_key_byte(GEM_VDI_UBYTE byte);
 
 /* button state assembled from the consumed key bytes */

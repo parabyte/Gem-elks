@@ -111,7 +111,7 @@ WORD __attribute__((optimize("Os")))
 }
 
 WORD __attribute__((optimize("Os")))
-	gem_vdi_resident_mouse(const struct gemtrap_request *request,
+	gem_vdi_resident_mouse(const struct gem_request *request,
 	WORD application, WORD number, GEM_BINDINGS_POINTER_SLOT form)
 {
 	if (!gem_vdi_screen || application < 0)

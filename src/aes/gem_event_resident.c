@@ -50,7 +50,7 @@ typedef struct gem_event_pd {
 typedef UBYTE GEM_EVENT_PD_MUST_BE_68_BYTES
 	[(sizeof(GEM_EVENT_PD) == 68) ? 1 : -1];
 
-static GEM_EVENT_PD gem_event_pds[GEM_EVENT_PD_COUNT];
+static GEM_EVENT_PD gem_event_pds[GEM_CHANNEL_COUNT];
 
 /* double-click rate table, milliseconds */
 static const UWORD gem_event_dclick_rates[GEM_EVENT_DCLICK_RATES] = {
@@ -104,7 +104,7 @@ gem_event_pd_at(UWORD owner)
 	GEM_EVENT_PD *pd;
 	UWORD index;
 
-	if (owner >= GEM_EVENT_PD_COUNT)
+	if (owner >= GEM_CHANNEL_COUNT)
 		return (GEM_EVENT_PD *) 0;
 	pd = gem_event_pds;
 	index = owner;
@@ -422,7 +422,7 @@ gem_event_resident_reset(VOID)
 	UWORD count;
 
 	pd = gem_event_pds;
-	count = GEM_EVENT_PD_COUNT;
+	count = GEM_CHANNEL_COUNT;
 	while (count--)
 		gem_event_clear_pd(pd++);
 	gem_event_dclick_index = 0;
@@ -488,7 +488,7 @@ gem_event_resident_input(const GEM_EVENT_INPUT *input)
 	WORD owner_changed;
 	WORD moved;
 
-	if (!input || input->owner >= GEM_EVENT_PD_COUNT
+	if (!input || input->owner >= GEM_CHANNEL_COUNT
 		|| input->key_ready > 1U)
 		return FALSE;
 	pd = gem_event_pd_at(input->owner);
@@ -587,7 +587,7 @@ gem_event_resident_tick(UWORD elapsed_milliseconds)
 	}
 
 	pd = gem_event_pds;
-	count = GEM_EVENT_PD_COUNT;
+	count = GEM_CHANNEL_COUNT;
 	while (count--) {
 		if (pd->state == GEM_EVENT_PD_ACTIVE
 			&& pd->wait_state == GEM_EVENT_WAIT_ACTIVE

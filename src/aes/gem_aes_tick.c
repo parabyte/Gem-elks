@@ -6,14 +6,13 @@
 #include "gem_form_resident.h"
 #include "gem_graf_resident.h"
 #include "gem_menu_pull_resident.h"
-#include "gem_proc.h"
 #include "gem_resident_memory.h"
 #include "gem_vdi_resident.h"
 #include "gem_window_resident.h"
 
 /* copy one checked 16 byte message */
 WORD
-gem_resident_event_message(const struct gemtrap_request *request,
+gem_resident_event_message(const struct gem_request *request,
 	GEM_RESIDENT_PD *pd, const GEM_EVENT_EFFECTS *effects)
 {
 	if (!effects->read_message)
@@ -52,7 +51,7 @@ gem_resident_update_progress(VOID)
 		if (!pd || pd->state != GEM_PD_ATTACHED
 			|| pd->pid != pending->request.pid
 			|| pd->segment != pending->request.ds
-			|| pd->task_slot != (UBYTE) pending->request.slot
+			|| pending->request.slot != (UWORD) channel
 			|| pd->generation_lo != pending->buffer_offset
 			|| pd->generation_hi != pending->length) {
 			/* fail a reused channel */
@@ -103,7 +102,7 @@ gem_resident_graf_progress(VOID)
 
 	owner_segment = gem_resident_data_segment();
 	channel = 0;
-	while (channel < GEM_PROC_CHANNELS) {
+	while (channel < GEM_CHANNEL_COUNT) {
 		pending = gem_pending_at((WORD) channel);
 		if (pending->state == GEM_PENDING_WAITING
 			&& pending->operation == GEM_PENDING_GRAF) {
@@ -171,7 +170,7 @@ gem_resident_form_progress(VOID)
 
 	owner_segment = gem_resident_data_segment();
 	channel = 0;
-	while (channel < GEM_PROC_CHANNELS) {
+	while (channel < GEM_CHANNEL_COUNT) {
 		pending = gem_pending_at((WORD) channel);
 		if (pending->state == GEM_PENDING_WAITING
 			&& pending->operation == GEM_PENDING_FORM) {
@@ -217,7 +216,7 @@ gem_resident_event_progress(VOID)
 	UBYTE channel;
 
 	channel = 0;
-	while (channel < GEM_PROC_CHANNELS) {
+	while (channel < GEM_CHANNEL_COUNT) {
 		pending = gem_pending_at((WORD) channel);
 		if (pending->state == GEM_PENDING_WAITING
 			&& pending->operation == GEM_PENDING_EVENT) {
@@ -276,7 +275,7 @@ gem_resident_form_input_sample(GEM_RESIDENT_PD *pd, WORD channel,
 		return TRUE;
 	}
 
-	/* a broken held state must drop its update lock and client pin */
+	/* drop a broken held state */
 	(void) gem_resident_form_detach_owner(pd, channel);
 	pending = gem_pending_at(channel);
 	if (pending && pending->state == GEM_PENDING_WAITING
@@ -311,11 +310,11 @@ gem_aes_resident_poll(UWORD elapsed_milliseconds)
 	if (elapsed_milliseconds)
 		gem_event_resident_tick(elapsed_milliseconds);
 
-	/* send shared input to the foreground PD */
-	channel = gem_proc_foreground_channel();
+	/* the top window owns input */
+	channel = gem_window_resident_top_owner(&gem_resident_windows);
 	pd = gem_resident_pd_for_channel(channel);
 	if (!pd || pd->state != GEM_PD_ATTACHED) {
-		channel = GEM_PROC_DESKTOP;
+		channel = GEM_CHANNEL_DESKTOP;
 		pd = gem_resident_pd_for_channel(channel);
 	}
 	if (pd && pd->state == GEM_PD_ATTACHED

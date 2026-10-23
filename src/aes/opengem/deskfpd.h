@@ -34,7 +34,7 @@
 #define E_NOPNODES 101
 #define E_NODNODES 102
 
-#define NUM_FNODES 400
+#define NUM_FNODES 192
 #define NUM_PNODES 6
 					/* one more than windows for	*/
 					/*   unopen disk copy		*/

@@ -65,7 +65,7 @@ typedef OBJECT GEM_MENU_PULL_OBJECT;
 typedef UBYTE GEM_MENU_PULL_FAR *GEM_MENU_PULL_BYTE_POINTER;
 typedef const UBYTE GEM_MENU_PULL_FAR *GEM_MENU_PULL_TEXT_POINTER;
 
-/* one checked view of a relocated RSC tree. segment is the 8086 segment RSRC_LOAD wrote into the relocated pointer slots, tree_offset and bytes are byte counts */
+/* one checked relocated menu tree */
 typedef struct gem_menu_pull_tree {
 	GEM_MENU_PULL_BYTE_POINTER resource;
 	UWORD bytes;
@@ -74,7 +74,7 @@ typedef struct gem_menu_pull_tree {
 	UWORD object_count;
 } GEM_MENU_PULL_TREE;
 
-/* build a view from the relocated per-PD RSC segment. address is the tree address RSRC_GADDR returned, object_count is the local LASTOB extent from the MENU_BAR check */
+/* build a checked menu-tree view */
 WORD gem_menu_pull_resident_tree_from_resource(GEM_MENU_PULL_TREE *view,
 	const GEM_RESOURCE_RESIDENT *resource, GEM_FAR_ADDRESS address,
 	UWORD object_count);
@@ -95,7 +95,7 @@ typedef struct gem_menu_pull_draw_effect {
 	GEM_MENU_PULL_RECTANGLE rectangle;
 } GEM_MENU_PULL_DRAW_EFFECT;
 
-/* effects carry no client pointer. a generated message is eight GEM words and names a generation-safe ELKS destination */
+/* pointer-free menu effects */
 typedef struct gem_menu_pull_effects {
 	GEM_MENU_PULL_DRAW_EFFECT draw[GEM_MENU_PULL_DRAW_EFFECTS];
 	UWORD target_owner;
@@ -131,7 +131,7 @@ typedef struct gem_menu_pull_input {
 	UBYTE key_ready;
 } GEM_MENU_PULL_INPUT;
 
-/* synthetic M_DESK object snapshot for the drawing adapter. text comes from the Information/separator strings or a fixed Desk registration slot */
+/* one synthetic M_DESK object */
 typedef struct gem_menu_pull_desk_object {
 	WORD next;
 	WORD head;
@@ -153,7 +153,7 @@ WORD gem_menu_pull_resident_activate(const GEM_MENU_PULL_TREE *tree,
 WORD gem_menu_pull_resident_deactivate(UWORD owner, UWORD generation_lo,
 	UWORD generation_hi, GEM_MENU_PULL_EFFECTS *effects);
 
-/* handle MENU_ICHECK through MENU_CLICK. unknown selector sets *handled FALSE, a known call with bad args returns FALSE with *handled TRUE, like the event manager */
+/* dispatch MENU_ICHECK through MENU_CLICK */
 WORD gem_menu_pull_resident_dispatch(const GEM_MENU_PULL_CALL *call,
 	GEM_MENU_PULL_EFFECTS *effects, WORD *handled);
 

@@ -1,4 +1,4 @@
-/* VDI trap arrays for standalone apps */
+/* VDI arrays for standalone apps */
 
 #include "aes.h"
 

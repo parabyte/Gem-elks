@@ -30,8 +30,7 @@ typedef union desk_view_storage {
 EXT DESK_VIEW_STORAGE gl_view_storage __attribute__((aligned(2)));
 #define gl_icons gl_view_storage.icons
 #define gl_text_rows gl_view_storage.text
-extern union	REGS DR;
-#define DOS_AX DR.x.ax
+extern UWORD DOS_AX;
 EXT WORD	gl_hchar;
 EXT WORD	gl_wchar;
 EXT WORD	gl_hschar;
@@ -88,7 +87,7 @@ EXT WORD	gl_apid;
 
 // not in DESKTOP v1.2 EXT LPBYTE	ad_ptext;
 // not in DESKTOP v1.2 EXT LPBYTE	ad_picon;
-// not in DESKTOP v1.2 EXT GRECT	gl_savewin[NUM_WNODES];	/* preserve window x,y,w,h	*/
+// not in Desktop 1.2
 // not in DESKTOP v1.2 EXT GRECT	gl_normwin;		/* normal (small) window size	*/
 // not in DESKTOP v1.2 EXT WORD	gl_open1st;		/* index of window to open 1st	*/
 EXT BYTE	gl_defdrv;		/* letter of lowest drive	*/

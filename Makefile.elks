@@ -17,7 +17,7 @@ NM ?= $(ELKS_CROSS)/ia16-elf-nm
 export PATH := $(ELKS_TOOLS):$(PATH)
 BUILD_DIR ?= build
 OBJ_DIR := $(BUILD_DIR)/obj
-TRAP_OBJ_DIR := $(OBJ_DIR)/trap
+CLIENT_OBJ_DIR := $(OBJ_DIR)/client
 LIB_DIR := $(BUILD_DIR)/lib
 BIN_DIR := $(BUILD_DIR)/bin
 MAP_DIR := $(BUILD_DIR)/maps
@@ -84,7 +84,7 @@ VDI_SRCS := \
 VDI_ASM_SRCS := src/vdi/drivers/gem_pcvideo_asm.S
 
 RESIDENT_SRCS := \
-	src/aes/gem_proc_elks.c \
+	src/aes/gem_exec_elks.c \
 	src/aes/gem_aes_resident.c \
 	src/aes/gem_aes_tick.c \
 	src/aes/gem_pending.c \
@@ -111,7 +111,6 @@ RESIDENT_SRCS := \
 	src/vdi/gem_vdi_output.c \
 	src/vdi/gem_vdi_mouse.c \
 	src/vdi/gem_vdi_font.c \
-	src/vdi/gem_vdi_sysfont.c \
 	src/vdi/gem_vdi_text.c \
 	src/vdi/gem_vdi_palette.c \
 	src/vdi/gem_vdi_sound.c \
@@ -137,7 +136,6 @@ DESKTOP_SRCS := \
 	src/aes/opengem/deskdir.c \
 	src/aes/opengem/deskgsx.c \
 	src/aes/opengem/desktype.c \
-	src/aes/opengem/deskcds.c \
 	src/aes/opengem/optimize.c \
 	src/aes/opengem/desksupp.c \
 	src/aes/opengem/deskiacc.c \
@@ -151,41 +149,41 @@ DESKTOP_DIRECT_SRCS := \
 DESKTOP_ACC_SRCS := \
 	src/aes/opengem/deskacc.c
 DESKTOP_ACC_OBJECTS := \
-	$(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(DESKTOP_ACC_SRCS))
+	$(patsubst src/%.c,$(CLIENT_OBJ_DIR)/%.o,$(DESKTOP_ACC_SRCS))
 
-# Desktop enters INT 0xef directly.
+# Desktop calls the stock ELKS socket directly.
 CLIENT_SRCS := \
 	src/desktop/gemdesk_main.c
 
-# direct INT EFh bindings
-TRAP_BINDING_SRCS := $(wildcard src/bindings/original/*.c)
+# direct stock ELKS bindings
+CLIENT_BINDING_SRCS := $(wildcard src/bindings/original/*.c)
 DIRECT_BINDING_SRCS := \
 	src/bindings/gem_direct_aes.c \
 	src/bindings/gem_direct_vdi.c
 DIRECT_BINDING_OBJECTS := \
 	$(patsubst src/bindings/%.c,\
-		$(TRAP_OBJ_DIR)/bindings/%.o,$(DIRECT_BINDING_SRCS))
+		$(CLIENT_OBJ_DIR)/bindings/%.o,$(DIRECT_BINDING_SRCS))
 
 VDI_OBJECTS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(VDI_SRCS))
 VDI_ASM_OBJECTS := $(patsubst src/%.S,$(OBJ_DIR)/%.o,$(VDI_ASM_SRCS))
 RESIDENT_OBJECTS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(RESIDENT_SRCS))
-DESKTOP_OBJECTS := $(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(DESKTOP_SRCS))
+DESKTOP_OBJECTS := $(patsubst src/%.c,$(CLIENT_OBJ_DIR)/%.o,$(DESKTOP_SRCS))
 DESKTOP_DIRECT_OBJECTS := \
-	$(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(DESKTOP_DIRECT_SRCS))
+	$(patsubst src/%.c,$(CLIENT_OBJ_DIR)/%.o,$(DESKTOP_DIRECT_SRCS))
 CLIENT_OBJECTS := \
-	$(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(CLIENT_SRCS))
+	$(patsubst src/%.c,$(CLIENT_OBJ_DIR)/%.o,$(CLIENT_SRCS))
 
-# apps enter INT 0xef directly
+# apps call the stock ELKS socket directly
 APP_SRCS := \
 	src/apps/gemclock.c \
 	src/apps/gemcalc.c \
 	src/apps/gemview/gemview.c \
 	src/apps/gemview/gemview_html.c \
 	src/apps/gemview/gemview_net.c
-APP_OBJECTS := $(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(APP_SRCS))
-GEMVIEW_OBJECTS := $(TRAP_OBJ_DIR)/apps/gemview/gemview.o \
-	$(TRAP_OBJ_DIR)/apps/gemview/gemview_html.o \
-	$(TRAP_OBJ_DIR)/apps/gemview/gemview_net.o
+APP_OBJECTS := $(patsubst src/%.c,$(CLIENT_OBJ_DIR)/%.o,$(APP_SRCS))
+GEMVIEW_OBJECTS := $(CLIENT_OBJ_DIR)/apps/gemview/gemview.o \
+	$(CLIENT_OBJ_DIR)/apps/gemview/gemview_html.o \
+	$(CLIENT_OBJ_DIR)/apps/gemview/gemview_net.o
 
 # Antler IRC client, direct ELKS sockets
 IRC_SRCS := \
@@ -193,14 +191,14 @@ IRC_SRCS := \
 	src/apps/irc/gem_irc_app.c \
 	src/apps/irc/gem_irc_protocol.c \
 	src/apps/irc/gem_irc_transport_elks.c
-IRC_OBJECTS := $(patsubst src/%.c,$(TRAP_OBJ_DIR)/%.o,$(IRC_SRCS))
+IRC_OBJECTS := $(patsubst src/%.c,$(CLIENT_OBJ_DIR)/%.o,$(IRC_SRCS))
 # use the IRC input editor
 $(IRC_OBJECTS): CPPFLAGS += -DIRC_AES_INPUT=0
-APP_RUNTIME_OBJECT := $(TRAP_OBJ_DIR)/apps/gem_app_vdi.o \
-	$(TRAP_OBJ_DIR)/bindings/gem_wordpair.o
-TRAP_BINDING_OBJECTS := \
+APP_RUNTIME_OBJECT := $(CLIENT_OBJ_DIR)/apps/gem_app_vdi.o \
+	$(CLIENT_OBJ_DIR)/bindings/gem_wordpair.o
+CLIENT_BINDING_OBJECTS := \
 	$(patsubst src/bindings/original/%.c,\
-		$(TRAP_OBJ_DIR)/bindings/original/%.o,$(TRAP_BINDING_SRCS))
+		$(CLIENT_OBJ_DIR)/bindings/original/%.o,$(CLIENT_BINDING_SRCS))
 
 GEM := $(BIN_DIR)/gem
 GEMDESK := $(BIN_DIR)/gemdesk
@@ -209,22 +207,18 @@ GEMCALC := $(BIN_DIR)/gemcalc
 GEMVIEW := $(BIN_DIR)/gemview
 GEMIRC := $(BIN_DIR)/gemirc
 LIBVDI := $(LIB_DIR)/libvdi.a
-LIBGEMTRAP := $(LIB_DIR)/libgemtrap.a
-ELKS_GEM_PATCH := patches/elks/0001-gemtrap-kernel-broker.patch
+LIBGEM := $(LIB_DIR)/libgem.a
 IRC_MODEL_TEST := $(BUILD_DIR)/tests/gem_irc_model
-.PHONY: all check-elks check-irc patch-elks install clean
+.PHONY: all check-elks check-irc install clean
 
 all: check-elks $(GEM) $(GEMDESK) $(GEMCLOCK) $(GEMCALC) $(GEMVIEW) $(GEMIRC)
 
 check-elks:
-	@test -r "$(ELKS_ROOT)/elks/include/linuxmt/gemtrap.h" || { \
-		echo "GEM: ELKS_ROOT has no GEM trap broker." >&2; \
-		echo "Run: make -f Makefile.elks patch-elks ELKS_ROOT=$(ELKS_ROOT)" >&2; \
+	@test -r "$(ELKS_ROOT)/libc/include/sys/socket.h" \
+		-a -r "$(ELKS_ROOT)/elks/include/linuxmt/un.h" || { \
+		echo "GEM: ELKS_ROOT is not a complete ELKS tree." >&2; \
 		exit 1; \
 	}
-
-patch-elks:
-	sh scripts/apply-elks-kernel.sh "$(ELKS_ROOT)"
 
 $(IRC_MODEL_TEST): tests/gem_irc_model.c src/apps/irc/gem_irc_app.c \
 		src/apps/irc/gem_irc_protocol.c src/apps/irc/gem_irc_app.h \
@@ -242,7 +236,7 @@ $(LIBVDI): $(VDI_OBJECTS) $(VDI_ASM_OBJECTS)
 	rm -f $@
 	$(AR) $(ARFLAGS) $@ $^
 
-$(LIBGEMTRAP): $(TRAP_BINDING_OBJECTS) $(DIRECT_BINDING_OBJECTS)
+$(LIBGEM): $(CLIENT_BINDING_OBJECTS) $(DIRECT_BINDING_OBJECTS)
 	@mkdir -p $(dir $@)
 	rm -f $@
 	$(AR) $(ARFLAGS) $@ $^
@@ -255,24 +249,24 @@ $(OBJ_DIR)/%.o: src/%.S | check-elks
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(TRAP_OBJ_DIR)/bindings/original/%.o: src/bindings/original/%.c | check-elks
+$(CLIENT_OBJ_DIR)/bindings/original/%.o: src/bindings/original/%.c | check-elks
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(BINDINGS_CPPFLAGS) -DGEM_TRAP_FAR_DATA=1 \
+	$(CC) $(CPPFLAGS) $(BINDINGS_CPPFLAGS) -DGEM_FAR_DATA=1 \
 		$(CFLAGS) -c $< -o $@
 
-$(TRAP_OBJ_DIR)/bindings/gem_direct_%.o: src/bindings/gem_direct_%.c | check-elks
+$(CLIENT_OBJ_DIR)/bindings/gem_direct_%.o: src/bindings/gem_direct_%.c | check-elks
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(BINDINGS_CPPFLAGS) -DGEM_TRAP_FAR_DATA=1 \
+	$(CC) $(CPPFLAGS) $(BINDINGS_CPPFLAGS) -DGEM_FAR_DATA=1 \
 		$(CFLAGS) -c $< -o $@
 
-$(TRAP_OBJ_DIR)/%.o: src/%.c | check-elks
+$(CLIENT_OBJ_DIR)/%.o: src/%.c | check-elks
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) -DGEM_TRAP_FAR_DATA=1 \
+	$(CC) $(CPPFLAGS) -DGEM_FAR_DATA=1 \
 		$(CFLAGS) -c $< -o $@
 
-$(TRAP_OBJ_DIR)/%.o: src/%.S | check-elks
+$(CLIENT_OBJ_DIR)/%.o: src/%.S | check-elks
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) -DGEM_TRAP_FAR_DATA=1 \
+	$(CC) $(CPPFLAGS) -DGEM_FAR_DATA=1 \
 		$(CFLAGS) -c $< -o $@
 
 $(DESKTOP_OBJECTS) $(DESKTOP_ACC_OBJECTS): $(wildcard src/aes/opengem/*.h) \
@@ -288,40 +282,40 @@ $(GEM): $(RESIDENT_OBJECTS) $(LIBVDI)
 		$(RESIDENT_OBJECTS) $(LIBVDI)
 
 $(GEMDESK): $(DESKTOP_OBJECTS) $(DESKTOP_DIRECT_OBJECTS) $(DESKTOP_ACC_OBJECTS) \
-		$(CLIENT_OBJECTS) $(LIBGEMTRAP)
+		$(CLIENT_OBJECTS) $(LIBGEM)
 	@mkdir -p $(dir $@) $(MAP_DIR)
 	$(CC) $(LDFLAGS) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
 		-msegment-relocation-stuff \
-		-maout-stack=4096 -maout-heap=16384 \
+		-maout-stack=4096 -maout-heap=14336 \
 		-Wl,--gc-sections -Wl,--icf=all \
 		-Wl,-Map,$(MAP_DIR)/gemdesk.map -o $@ \
 		$(CLIENT_OBJECTS) $(DESKTOP_OBJECTS) $(DESKTOP_DIRECT_OBJECTS) \
-		$(DESKTOP_ACC_OBJECTS) $(LIBGEMTRAP)
+		$(DESKTOP_ACC_OBJECTS) $(LIBGEM)
 
-$(GEMCLOCK): $(TRAP_OBJ_DIR)/apps/gemclock.o \
-		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+$(GEMCLOCK): $(CLIENT_OBJ_DIR)/apps/gemclock.o \
+		$(APP_RUNTIME_OBJECT) $(LIBGEM)
 	@mkdir -p $(dir $@) $(MAP_DIR)
 	$(CC) $(LDFLAGS) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
 		-msegment-relocation-stuff \
 		-maout-stack=2048 -maout-heap=1024 \
 		-Wl,--gc-sections -Wl,--icf=all \
 		-Wl,-Map,$(MAP_DIR)/gemclock.map -o $@ \
-		$(TRAP_OBJ_DIR)/apps/gemclock.o \
-		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+		$(CLIENT_OBJ_DIR)/apps/gemclock.o \
+		$(APP_RUNTIME_OBJECT) $(LIBGEM)
 
-$(GEMCALC): $(TRAP_OBJ_DIR)/apps/gemcalc.o \
-		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+$(GEMCALC): $(CLIENT_OBJ_DIR)/apps/gemcalc.o \
+		$(APP_RUNTIME_OBJECT) $(LIBGEM)
 	@mkdir -p $(dir $@) $(MAP_DIR)
 	$(CC) $(LDFLAGS) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
 		-msegment-relocation-stuff \
 		-maout-stack=2048 -maout-heap=1024 \
 		-Wl,--gc-sections -Wl,--icf=all \
 		-Wl,-Map,$(MAP_DIR)/gemcalc.map -o $@ \
-		$(TRAP_OBJ_DIR)/apps/gemcalc.o \
-		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+		$(CLIENT_OBJ_DIR)/apps/gemcalc.o \
+		$(APP_RUNTIME_OBJECT) $(LIBGEM)
 
 $(GEMVIEW): $(GEMVIEW_OBJECTS) \
-		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+		$(APP_RUNTIME_OBJECT) $(LIBGEM)
 	@mkdir -p $(dir $@) $(MAP_DIR)
 	$(CC) $(LDFLAGS) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
 		-msegment-relocation-stuff \
@@ -329,18 +323,18 @@ $(GEMVIEW): $(GEMVIEW_OBJECTS) \
 		-Wl,--gc-sections -Wl,--icf=all \
 		-Wl,-Map,$(MAP_DIR)/gemview.map -o $@ \
 		$(GEMVIEW_OBJECTS) \
-		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+		$(APP_RUNTIME_OBJECT) $(LIBGEM)
 
 $(GEMIRC): $(IRC_OBJECTS) \
-		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+		$(APP_RUNTIME_OBJECT) $(LIBGEM)
 	@mkdir -p $(dir $@) $(MAP_DIR)
 	$(CC) $(LDFLAGS) -mcmodel=medium -melks-libc -march=i8086 -mtune=i8086 \
 		-msegment-relocation-stuff \
-		-maout-stack=4096 -maout-heap=1024 \
+		-maout-stack=3072 -maout-heap=1024 \
 		-Wl,--gc-sections -Wl,--icf=all \
 		-Wl,-Map,$(MAP_DIR)/gemirc.map -o $@ \
 		$(IRC_OBJECTS) \
-		$(APP_RUNTIME_OBJECT) $(LIBGEMTRAP)
+		$(APP_RUNTIME_OBJECT) $(LIBGEM)
 
 install: all
 	install -d $(DESTDIR)/bin $(DESTDIR)/lib/gemsys
@@ -355,9 +349,6 @@ install: all
 		assets/lib/gemsys/desktop.inf \
 		assets/lib/gemsys/deskhi.icn \
 		assets/lib/gemsys/desklo.icn \
-		assets/lib/gemsys/sysfont.08 \
-		assets/lib/gemsys/sysfont.14 \
-		assets/lib/gemsys/sysfont.16 \
 		$(DESTDIR)/lib/gemsys/
 
 clean:

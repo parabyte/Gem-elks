@@ -205,7 +205,8 @@ gem_vdi_font_face_intern(UWORD face, const BYTE *name)
 }
 
 VOID
-gem_vdi_font_reset(UWORD rom_segment, UWORD rom_offset, UWORD rom_rows)
+gem_vdi_font_reset(UWORD rom_segment, UWORD rom_offset,
+	UWORD rom_upper_segment, UWORD rom_upper_offset, UWORD rom_rows)
 {
 	static const BYTE system_name[] = "System";
 	const UWORD *metrics;
@@ -243,6 +244,8 @@ gem_vdi_font_reset(UWORD rom_segment, UWORD rom_offset, UWORD rom_rows)
 	font->data_segment = rom_segment;
 	font->dat_offset = rom_offset;
 	font->rom_rows = rom_rows ? rom_rows : 16U;
+	font->rom_upper_segment = rom_upper_segment;
+	font->rom_upper_offset = rom_upper_offset;
 	font->file_index = GEM_VDI_FONT_NO_FILE;
 	font->face_index = gem_vdi_font_face_intern(1, system_name);
 	gem_vdi_font_used = 1;
@@ -709,21 +712,26 @@ gem_vdi_font_glyph(const GEM_VDI_FONT *font, UWORD character,
 	UWORD row;
 	UWORD index;
 	UWORD offset;
+	UWORD data_segment;
 	UWORD value;
 
 	if (!font || !rows || !stride || !font->data_segment)
 		return 0;
 
 	if (font->rom_rows) {
-		/* the system font keeps one byte per row per glyph not a strip
-		 * so the copy is one run, every code including the furniture
-		 * codes below 32 is a glyph in the font */
 		if (character > 255U)
 			return 0;
-		offset = (UWORD) (font->dat_offset
+		data_segment = font->data_segment;
+		offset = font->dat_offset;
+		if (character >= 128U && font->rom_upper_segment) {
+			character = (UWORD) (character - 128U);
+			data_segment = font->rom_upper_segment;
+			offset = font->rom_upper_offset;
+		}
+		offset = (UWORD) (offset
 			+ (UWORD) (character * font->rom_rows));
 		for (row = 0; row < font->rom_rows; row++) {
-			gem_resident_memory_from(font->data_segment,
+			gem_resident_memory_from(data_segment,
 				(UWORD) (offset + row), source, 1U);
 			rows[row * stride] = source[0];
 			for (index = 1; index < stride; index++)

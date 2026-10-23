@@ -151,20 +151,7 @@ VOID do_wopen(WORD new_win, WORD wh, WORD curr, WORD x, WORD y, WORD w, WORD h)
 	WORD		right, bottom;
 
 	do_xyfix(&x, &y);
-	/*
-	 * DESKTOP.INF stores window geometry in character cells.  An original
-	 * profile can therefore describe a window wider or taller than the
-	 * current ELKS video mode.  The resident GEM window manager correctly
-	 * rejects an outer rectangle which crosses the physical screen edge, but
-	 * old Desktop ignored WIND_OPEN's return value and left the icon merely
-	 * deselected.  Constrain the saved rectangle to the actual root work area
-	 * before retaining the original grow-box and WIND_OPEN sequence.
-	 *
-	 * Every value is a signed 16-bit pixel coordinate.  Width and height are
-	 * clamped before the right/bottom subtraction, so neither addition nor
-	 * subtraction can overflow on the 640 by 480 XT target.  There is no
-	 * scaling, rounding, division, allocation, or wrapper call here.
-	 */
+	/* clamp saved geometry to the current screen */
 	if (w <= 0 || h <= 0)
 	{
 	  x = G.g_xfull;
@@ -450,17 +437,7 @@ WORD do_aopen(ANODE *pa, WORD isapp, WORD curr, WORD drv,
 	  pcmd = &G.g_cmd[0];
 	  ptail = &G.g_tail[1];
 	} /* if */
-	/*
-	 * DOS kept one current directory for Desktop and the GEM/XM loader.
-	 * ELKS correctly gives gemdesk and the resident gemaes owner separate
-	 * process-local current directories.  Keep the original PROC_CREATE /
-	 * PROC_RUN path, but pass it the selected application's absolute POSIX
-	 * pathname instead of relying on DOS's shared-directory side effect.
-	 *
-	 * fpd_bldspec() is the existing bounded Desktop path builder.  It accepts
-	 * the complete filename (including its dot), rejects embedded slashes,
-	 * and fails before the 67-byte original PNODE limit can wrap or truncate.
-	 */
+	/* build the absolute ELKS path before SHEL_WRITE */
 	if (ret && direct_app)
 	{
 	  if (!fpd_bldspec(drv, ppath, pcmd, (BYTE *) "", G.g_srcpth))
@@ -479,12 +456,7 @@ WORD do_aopen(ANODE *pa, WORD isapp, WORD curr, WORD drv,
 	       (pcmd  !=  NULL)  ) strlcpy(G.g_cmd, pcmd, sizeof(G.g_cmd));
 	  if ( (ptail != &G.g_tail[1]) && 
 	       (ptail !=  NULL)  ) strlcpy(G.g_tail+1, ptail, sizeof(G.g_tail)-1);
-	  /*
-	   * SHEL_FIND is the original GEM path service.  On ELKS its resident
-	   * implementation validates absolute direct-click paths and resolves a
-	   * bare DESKTOP.INF association through GEMSYS, GEMAPPS, then /bin.
-	   * PROC_RUN therefore never receives a command relative to gemaes's cwd.
-	   */
+	  /* resolve the command through the configured ELKS paths */
 	  if (!shel_find(G.a_cmd))
 	    fun_alert(1, STAPGONE);
 	  else
@@ -540,7 +512,6 @@ VOID do_fopen(WNODE *pw, WORD curr, WORD drv,
 	WORD		ok;
 	BYTE		*pnew, *parent;
 
-//	dbg("do_fopen: drv=%d ppath=%s pname=%s pext=%s\n", drv, ppath, pname, pext);	
 	ok = TRUE;
 	pnew = ppath;
 	wind_get(pw->w_id, WF_WXYWH, &t.g_x, &t.g_y, &t.g_w, &t.g_h);
@@ -655,13 +626,7 @@ VOID do_fopen(WNODE *pw, WORD curr, WORD drv,
 *	Open an icon
 */
 
-/*
- * ELKS: run a selected regular file directly when the kernel will exec() it.
- * Build the absolute spec, resolve it through SHEL_FIND, and launch it exactly
- * like a directly-clicked application.  Returns FALSE - leaving the Desktop
- * untouched - when the file is not executable, so ordinary documents fall
- * through to the normal DESKTOP.INF association handling.
- */
+/* run one selected executable through ELKS */
 static WORD
 pro_run_file(WORD drv, BYTE *ppath, BYTE *pfname, WORD wh, WORD curr)
 {
@@ -674,9 +639,7 @@ pro_run_file(WORD drv, BYTE *ppath, BYTE *pfname, WORD wh, WORD curr)
 		return FALSE;
 	G.g_tail[0] = 0;
 	G.g_tail[1] = 0;
-	/* Plain executable: isgraf FALSE so the server runs it on the
-	 * text console.  GEM applications are launched isgraf TRUE from the
-	 * Desk menu and are served as a live GEM client instead. */
+	/* run plain executables on the text console */
 	return pro_run(FALSE, 1, wh, curr);
 }
 

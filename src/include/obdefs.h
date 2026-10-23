@@ -355,7 +355,7 @@ typedef char GEM_BITBLK_SIZE_IS_14[(sizeof(BITBLK) == 14) ? 1 : -1];
 typedef char GEM_RSHDR_SIZE_IS_36[(sizeof(RSHDR) == 36) ? 1 : -1];
 #if defined(__IA16__) || (defined(ELKS) && ELKS)
 typedef char GEM_MFDB_SIZE_IS_20[(sizeof(MFDB) == 20) ? 1 : -1];
-#if GEM_TRAP_FAR_DATA
+#if GEM_FAR_DATA
 typedef char GEM_PARMBLK_SIZE_IS_28[(sizeof(PARMBLK) == 28) ? 1 : -1];
 #else
 typedef char GEM_PARMBLK_SIZE_IS_26[(sizeof(PARMBLK) == 26) ? 1 : -1];

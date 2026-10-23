@@ -199,7 +199,7 @@ gem_planar_solid_span(GEM_VDI_COORD x1, GEM_VDI_COORD x2, GEM_VDI_COORD y)
 	*byte |= 1;
 }
 
-/* GEM patterns are anchored to the screen so one pattern byte covers every aligned byte on the row */
+/* anchor patterns to the screen */
 static void
 gem_planar_pattern_span(GEM_VDI_COORD x1, GEM_VDI_COORD x2,
 	GEM_VDI_COORD y, GEM_VDI_UBYTE pattern)
@@ -273,7 +273,7 @@ gem_planar_fill_pattern(GEM_VDI_COORD x1, GEM_VDI_COORD y1,
 			pattern[(GEM_VDI_UWORD) y & 7]);
 }
 
-/* put the VGA in plain write-mode-zero so the cursor code can read and write video bytes directly */
+/* use VGA write mode zero for the cursor */
 static void
 gem_planar_cursor_direct_begin(void)
 {
@@ -284,7 +284,7 @@ gem_planar_cursor_direct_begin(void)
 	outw(0xff08, 0x3ce);	/* all bits writable */
 }
 
-/* leave a neutral state, gem_planar_prepare() sets color and set/reset together on the next ordinary call */
+/* leave a neutral planar state */
 static void
 gem_planar_cursor_direct_end(void)
 {
@@ -297,7 +297,7 @@ gem_planar_cursor_direct_end(void)
 	outw(0xff08, 0x3ce);	/* full bit mask */
 }
 
-/* draw a clipped one-bit form straight from the source words, once per plane, so the RSC or ICN words stay the only copy of the image */
+/* draw a one-bit form once per plane */
 void
 gem_planar_bitmap_replace(GEM_VDI_COORD x1, GEM_VDI_COORD y1,
 	GEM_VDI_COORD x2, GEM_VDI_COORD y2, const GEM_VDI_BITS *bits,
@@ -395,7 +395,7 @@ gem_planar_bitmap_replace(GEM_VDI_COORD x1, GEM_VDI_COORD y1,
 	gem_planar_cursor_direct_end();
 }
 
-/* draw font rows through set/reset, source_left_bit is the glyph's first visible column, clear glyph bits never enter the mask so pixels under them are untouched */
+/* draw transparent glyph rows through set/reset */
 void
 gem_planar_glyph_replace(GEM_VDI_COORD x1, GEM_VDI_COORD y1,
 	GEM_VDI_COORD x2, GEM_VDI_COORD y2, const GEM_VDI_UBYTE *rows,
@@ -415,7 +415,7 @@ gem_planar_glyph_replace(GEM_VDI_COORD x1, GEM_VDI_COORD y1,
 
 	gem_planar_prepare(foreground, GEM_VDI_REPLACE);
 
-	/* an aligned unclipped 8-wide glyph row is already the bit mask, so the assembly helper takes the whole run */
+	/* the aligned glyph row is already a mask */
 	if (!source_x && source_left_bit == 0x80
 		&& x2 - x1 == 7 && !((GEM_VDI_UWORD) x1 & 7U)) {
 		row_count = (GEM_VDI_UWORD) (y2 - y1 + 1);
@@ -461,7 +461,7 @@ gem_planar_glyph_replace(GEM_VDI_COORD x1, GEM_VDI_COORD y1,
 	}
 }
 
-/* draw an aligned string straight from the 8x16 system font, zero on CGA and Hercules since their interleaved scan lines dont match the flat 80-byte planar layout so the VDI falls back to glyphs */
+/* draw an aligned planar string */
 GEM_VDI_WORD __far __attribute__((far_section, noinline,
 		section(".fartext.gem_planar_text_replace")))
 	gem_planar_text_replace(GEM_VDI_COORD x, GEM_VDI_COORD y,
@@ -501,7 +501,7 @@ gem_planar_cursor_save(void)
 				video_offset);
 			byte_count = gem_cursor_save_bytes;
 			while (byte_count) {
-				/* indexing the named global forces the SS override, a near-pointer store here once went through the video DS and trashed the framebuffer */
+				/* force the SS override through the named global */
 				gem_cursor_save[saved_index] = *video++;
 				saved_index++;
 				byte_count--;
@@ -625,7 +625,7 @@ void __attribute__((optimize("Os")))
 	gem_pc_video_set_palette(GEM_VDI_COLOR index, GEM_VDI_UBYTE red,
 	GEM_VDI_UBYTE green, GEM_VDI_UBYTE blue)
 {
-	/* only VGA has the DAC at 3c8/3c9, elsewhere the resident VDI keeps the requested palette for VQ_COLOR */
+	/* only VGA has the 3c8/3c9 DAC */
 	if (gem_video_adapter != GEM_VIDEO_VGA || index > 0x00ffU)
 		return;
 	if (red > 63U)

@@ -2,7 +2,7 @@
  * gem_pending.c - parked AES requests
  *
  * the bookkeeping for parked requests, park a request that cant finish,
- * keep it on the right FIFO, hand the finished ones back to the broker,
+ * keep it on the right FIFO, hand finished calls back to the socket loop,
  * see gem_pending.h for the state machine
  *
  * the message queues live here too, a parked APPL_READ finishes when a
@@ -11,12 +11,10 @@
 
 #include "gem_aes_internal.h"
 
-#include <errno.h>
-
 /* one slot per channel, the array index is the channel number */
-static GEM_PENDING gem_pending_slots[GEM_PROC_CHANNELS];
+static GEM_PENDING gem_pending_slots[GEM_CHANNEL_COUNT];
 
-/* finished requests waiting for the broker to reply, oldest first */
+/* finished requests, oldest first */
 static GEM_PENDING_LIST gem_pending_ready;
 
 /* WIND_UPDATE lock contenders, oldest first */
@@ -28,7 +26,7 @@ gem_pending_at(WORD channel)
 	GEM_PENDING *pending;
 	UWORD count;
 
-	if (channel < 0 || channel >= GEM_PROC_CHANNELS)
+	if (channel < 0 || channel >= GEM_CHANNEL_COUNT)
 		return NULL;
 	pending = gem_pending_slots;
 	count = (UWORD) channel;
@@ -57,7 +55,7 @@ gem_pending_reset(VOID)
 	UWORD count;
 
 	pending = gem_pending_slots;
-	count = GEM_PROC_CHANNELS;
+	count = GEM_CHANNEL_COUNT;
 	while (count--) {
 		gem_pending_clear(pending);
 		pending++;
@@ -148,7 +146,7 @@ gem_pending_list_remove(GEM_PENDING_LIST *list, UBYTE channel)
  */
 
 GEM_PENDING *
-gem_pending_park(const struct gemtrap_request *request, WORD channel,
+gem_pending_park(const struct gem_request *request, WORD channel,
 	UBYTE operation, WORD target, UWORD buffer_offset, UWORD length,
 	UWORD output_offset)
 {
@@ -170,8 +168,8 @@ gem_pending_park(const struct gemtrap_request *request, WORD channel,
 }
 
 /*
- * the binding reads int_out[0] not the AX the trap returned, so the
- * result must land in the clients pinned array before the reply
+ * the binding reads int_out[0] instead of the reply's AX, so the
+ * result must land in the clients array before the reply
  */
 VOID
 gem_pending_complete(UBYTE channel, WORD result)
@@ -205,17 +203,12 @@ gem_pending_finish_words(UBYTE channel, const UWORD *words, UWORD count)
 WORD
 gem_pending_cancel(GEM_PENDING *pending)
 {
-	WORD result;
-
-	result = gemctl(GEMCTL_CANCEL, &pending->request);
-	if (result != 0 && errno != ESRCH)
-		return FALSE;
 	gem_pending_clear(pending);
 	return TRUE;
 }
 
 WORD
-gem_pending_take_ready(struct gemtrap_request *request)
+gem_pending_take_ready(struct gem_request *request)
 {
 	GEM_PENDING *pending;
 	UBYTE channel;
@@ -307,7 +300,7 @@ gem_resident_queue_progress(GEM_RESIDENT_PD *pd)
 	UBYTE channel;
 	UWORD passes;
 
-	passes = GEM_PROC_CHANNELS;
+	passes = GEM_CHANNEL_COUNT;
 	while (passes--) {
 		channel = pd->read_waiters.head;
 		if (channel != GEM_PENDING_NONE) {

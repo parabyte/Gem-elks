@@ -50,7 +50,7 @@ typedef struct gem_graf_pd {
 /* twelve 64-byte PD records */
 typedef BYTE GEM_GRAF_PD_MUST_BE_64_BYTES[(sizeof(GEM_GRAF_PD) == 64) ? 1 : -1];
 
-static GEM_GRAF_PD gem_graf_pds[GEM_GRAF_PD_COUNT];
+static GEM_GRAF_PD gem_graf_pds[GEM_CHANNEL_COUNT];
 
 static WORD gem_graf_mouse_x;
 static WORD gem_graf_mouse_y;
@@ -74,7 +74,7 @@ gem_graf_pd_at(UWORD owner)
 {
 	GEM_GRAF_PD *pd;
 
-	if (owner >= GEM_GRAF_PD_COUNT)
+	if (owner >= GEM_CHANNEL_COUNT)
 		return (GEM_GRAF_PD *) 0;
 	pd = gem_graf_pds;
 	while (owner--)
@@ -207,7 +207,7 @@ gem_graf_xor_pair(const GEM_VDI_RECT *first, UBYTE draw_first,
 		return FALSE;
 	if (!draw_first && !draw_second)
 		return TRUE;
-	gem_vdi_set_clip(screen, 0, (const GEM_VDI_RECT *) 0);
+	gem_vdi_set_clip(screen, 0, 0, 0, 0, 0);
 	gem_vdi_hide_cursor(screen);
 	gem_vdi_set_mode(GEM_VDI_XOR);
 	gem_vdi_set_foreground(screen, gem_graf_native_white(screen));
@@ -363,7 +363,7 @@ gem_graf_animation_begin(GEM_VDI_SCREEN **screen)
 	*screen = gem_vdi_resident_screen();
 	if (!*screen)
 		return FALSE;
-	gem_vdi_set_clip(*screen, 0, (const GEM_VDI_RECT *) 0);
+	gem_vdi_set_clip(*screen, 0, 0, 0, 0, 0);
 	gem_vdi_hide_cursor(*screen);
 	gem_vdi_set_mode(GEM_VDI_XOR);
 	gem_vdi_set_foreground(*screen, gem_graf_native_white(*screen));
@@ -912,7 +912,7 @@ gem_graf_resident_reset(VOID)
 	UWORD count;
 
 	pd = gem_graf_pds;
-	count = GEM_GRAF_PD_COUNT;
+	count = GEM_CHANNEL_COUNT;
 	while (count--) {
 		gem_graf_clear_pd(pd);
 		pd++;
@@ -930,7 +930,7 @@ gem_graf_resident_input(const GEM_GRAF_INPUT *input)
 	GEM_VDI_SCREEN *screen;
 	WORD inside;
 
-	if (!input || input->owner >= GEM_GRAF_PD_COUNT)
+	if (!input || input->owner >= GEM_CHANNEL_COUNT)
 		return FALSE;
 	screen = gem_vdi_resident_screen();
 	if (!screen || input->mouse_x < 0 || input->mouse_y < 0
@@ -1128,7 +1128,7 @@ gem_graf_resident_dispatch(const GEM_GRAF_CALL *call,
 		return result;
 	}
 
-	if (call->owner >= GEM_GRAF_PD_COUNT)
+	if (call->owner >= GEM_CHANNEL_COUNT)
 		return gem_graf_malformed(call, handled);
 	pd = gem_graf_pd_at(call->owner);
 	if (pd->state != GEM_GRAF_PD_FREE) {

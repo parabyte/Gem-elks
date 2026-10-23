@@ -12,16 +12,16 @@
 #include "aes.h"
 #include "gem_bindings_elks.h"
 
-/* control block promises at least this many int_in, int_out and addr_in entries */
+/* check array counts */
 WORD gem_aes_call_counts(const UWORD *control, UWORD input_count,
 	UWORD output_count, UWORD address_count);
 
-/* every array the manager reads is present, pass null and zero count for one it dont carry */
+/* check required arrays */
 WORD gem_aes_call_arrays(const UWORD *int_in, UWORD input_count,
 	UWORD *int_out, UWORD output_count,
 	const GEM_BINDINGS_POINTER_SLOT *addr_in, UWORD address_count);
 
-/* known selector with bad args, mark it handled and answer FALSE in int_out[0] if theres room */
+/* reject one handled call */
 WORD gem_aes_call_malformed(const UWORD *control, UWORD *int_out,
 	WORD *handled);
 

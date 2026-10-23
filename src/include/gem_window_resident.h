@@ -145,7 +145,7 @@ typedef struct __attribute__((packed)) gem_window_message {
 	UWORD words[8];
 } GEM_WINDOW_MESSAGE;
 
-/* a manager op produces one merged dirty rectangle and zero or more messages. redraw_background separates geometry/z-order damage from a frame-only title or slider update, only the former may wipe client work pixels before WM_REDRAW arrives */
+/* one merged dirty area and its messages */
 typedef struct gem_window_effects {
 	UWORD dirty_valid;
 	UWORD redraw_background;
@@ -180,7 +180,7 @@ typedef struct gem_window_input {
 	UWORD mouse_buttons;
 } GEM_WINDOW_INPUT;
 
-/* AES-wide state, one static near-data object in gemaes. W_TREE and W_ACTIVE are the original OBJECT records, active_name and active_info are the shared TEDINFO records, rebuilt for whichever window is being drawn */
+/* shared resident window state */
 typedef struct gem_window_resident {
 	GEM_WINDOW_SLOT windows[GEM_WINDOW_COUNT];
 	OBJECT tree[GEM_WINDOW_COUNT];
@@ -197,7 +197,7 @@ typedef struct gem_window_resident {
 	WORD screen_height;
 	WORD box_width;
 	WORD box_height;
-	/* the controller blocked inside watchbox/dragbox/rubwind/slidebox, the ELKS owner keeps that interaction parked between polls */
+	/* one parked window-control interaction */
 	GRECT control_start;
 	GRECT control_track;
 	WORD control_start_x;
@@ -221,14 +221,14 @@ VOID gem_window_resident_init(GEM_WINDOW_RESIDENT *manager);
 WORD gem_window_resident_configure(GEM_WINDOW_RESIDENT *manager,
 	const GEM_WINDOW_SCREEN *screen);
 
-/* reset the counts and dirty geometry before dispatch or controller work. only records below message_count are valid, stale array slots stay dirty */
+/* reset dirty geometry and message count */
 VOID gem_window_resident_effects_init(GEM_WINDOW_EFFECTS *effects);
 
-/* turn one exposed screen rectangle into the Desktop/frame/WM_REDRAW effect. the input is clipped to the root work area below the menu bar, each open window produces at most one message so the twelve-record array cant overflow */
+/* turn one exposed area into redraw effects */
 WORD gem_window_resident_damage(GEM_WINDOW_RESIDENT *manager,
 	const GRECT *rectangle, GEM_WINDOW_EFFECTS *effects);
 
-/* dispatch WIND_CREATE..WIND_FIND. a known opcode sets handled TRUE and writes int_out[0], an unknown opcode sets handled FALSE so another manager can take it */
+/* dispatch WIND_CREATE through WIND_FIND */
 WORD gem_window_resident_dispatch(GEM_WINDOW_RESIDENT *manager,
 	const GEM_WINDOW_CALL *call, GEM_WINDOW_EFFECTS *effects,
 	WORD *handled);
@@ -243,7 +243,7 @@ WORD gem_window_resident_next(const GEM_WINDOW_RESIDENT *manager, WORD handle);
 /* input owner of the top window */
 WORD gem_window_resident_top_owner(const GEM_WINDOW_RESIDENT *manager);
 
-/* rebuild and return the shared nineteen-object W_ACTIVE tree for one open window. the near pointer stays valid only until the next build call, like the original W_ACTIVE */
+/* rebuild the shared W_ACTIVE tree */
 OBJECT *gem_window_resident_build_active(GEM_WINDOW_RESIDENT *manager,
 	WORD handle);
 
@@ -251,11 +251,11 @@ OBJECT *gem_window_resident_build_active(GEM_WINDOW_RESIDENT *manager,
 WORD gem_window_resident_gadget(GEM_WINDOW_RESIDENT *manager, WORD x,
 	WORD y, WORD *handle);
 
-/* push the controller along one step without busy-waiting. TRUE means the controller owns this sample and normal EVNT_BUTTON delivery must be held back. a press on an inactive window sends WM_TOPPED, release finishes closer/fuller, move/size or slider tracking */
+/* advance one window-control interaction */
 WORD gem_window_resident_input(GEM_WINDOW_RESIDENT *manager,
 	const GEM_WINDOW_INPUT *input, GEM_WINDOW_EFFECTS *effects);
 
-/* add one controller message. MOVED/SIZED put the rectangle in words four..seven, ARROWED/HSLID/VSLID put the action or 0..1000-scale value in rectangle.g_x. no window state changes until the client answers through WIND_SET, same flow as original GEM */
+/* append one window-control message */
 WORD gem_window_resident_control_message(GEM_WINDOW_RESIDENT *manager,
 	WORD handle, UWORD message, const GRECT *rectangle,
 	GEM_WINDOW_EFFECTS *effects);

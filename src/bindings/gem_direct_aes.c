@@ -1,4 +1,4 @@
-/* direct AES bindings missing from the pinned import */
+/* extra AES bindings */
 
 #include "ppdgem.h"
 #include "ppdg0.h"

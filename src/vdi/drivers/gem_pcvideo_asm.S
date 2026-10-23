@@ -39,7 +39,7 @@ gem_bios_video_detect:
 	jmp	4f
 
 2:
-	/* no EGA/VGA BIOS, use the equipment word display bits, mono startup means Hercules, color text means CGA */
+	/* use BIOS equipment bits when EGA/VGA is absent */
 	xor	%ax, %ax
 	mov	%ax, %ds
 	mov	0x0410, %ax
@@ -98,7 +98,35 @@ gem_bios_video_set_mode:
 	pop	%bp
 	lret
 
-/* low 16 bits of the BIOS tick count, a tick is about 55 ms and the count wraps cleanly under 16-bit unsigned subtraction */
+/* return the BIOS font address in DX:AX */
+	.global	gem_bios_font_address
+gem_bios_font_address:
+	push	%bp
+	mov	%sp, %bp
+	push	%bx
+	push	%cx
+	push	%es
+	push	%si
+	push	%di
+
+	mov	6(%bp), %bx
+	xor	%ax, %ax
+	mov	%ax, %es
+	xor	%bp, %bp
+	mov	$0x1130, %ax
+	int	$0x10
+	mov	%es, %dx
+	mov	%bp, %ax
+
+	pop	%di
+	pop	%si
+	pop	%es
+	pop	%cx
+	pop	%bx
+	pop	%bp
+	lret
+
+/* return the low BIOS tick word */
 	.global	gem_vdi_clock_ticks
 gem_vdi_clock_ticks:
 	xor	%ah, %ah
@@ -106,7 +134,7 @@ gem_vdi_clock_ticks:
 	mov	%dx, %ax
 	lret
 
-/* whole BIOS tick count (INT 1Ah returns CX:DX) into two caller words, 6(BP) high out pointer, 8(BP) low out pointer */
+/* copy the CX:DX BIOS tick count */
 	.global	gem_vdi_clock_words
 gem_vdi_clock_words:
 	push	%bp
@@ -130,7 +158,7 @@ gem_vdi_clock_words:
 	pop	%bp
 	lret
 
-/* y * 80 + x / 8 for the 640-pixel EGA/VGA modes, args 6(BP) x, 8(BP) y, largest offset 38399 fits in AX */
+/* return y * 80 + x / 8 */
 	.global	gem_pc_planar_offset
 gem_pc_planar_offset:
 	push	%bp
@@ -167,7 +195,7 @@ gem_pc_byte_column:
 	pop	%bp
 	lret
 
-/* CGA mode-6 byte offset, even scan lines at B800:0000, odd at B800:2000, each bank holds 100 rows of 80 bytes */
+/* return one CGA mode-6 byte offset */
 	.global	gem_pc_cga_offset
 gem_pc_cga_offset:
 	push	%bp
@@ -203,7 +231,7 @@ gem_pc_cga_offset:
 	pop	%bp
 	lret
 
-/* Hercules 720x348 byte offset, four scan-line banks interleave at 0x0000/0x2000/0x4000/0x6000, a logical row is 90 bytes */
+/* return one interleaved Hercules byte offset */
 	.global	gem_pc_hercules_offset
 gem_pc_hercules_offset:
 	push	%bp
@@ -257,7 +285,7 @@ gem_pc_hercules_offset:
 	pop	%bp
 	lret
 
-/* copy one byte run inside a video segment, reverse copies use a load/store loop not STD so an ELKS signal mid-copy never lands in C with the direction flag set, args 6(BP) segment, 8(BP) source offset, 10(BP) dest offset, 12(BP) count, 14(BP) reverse */
+/* copy one byte run without leaving DF set */
 	.global	gem_pc_video_copy_bytes
 gem_pc_video_copy_bytes:
 	push	%bp
@@ -300,7 +328,7 @@ gem_pc_video_copy_bytes:
 	pop	%bp
 	lret
 
-/* fill whole bytes across consecutive 80-byte planar scan lines, C caller set color, op and an ff bit mask, nonzero read-latches does LODSB before each STOSB so XOR/OR/AND modes see fresh latches, args 6(BP) first offset, 8(BP) bytes per row, 10(BP) rows, 12(BP) read-latches flag */
+/* fill bytes across planar scan lines */
 	.global	gem_pc_planar_fill_rows
 gem_pc_planar_fill_rows:
 	push	%bp
@@ -357,7 +385,7 @@ gem_pc_planar_fill_rows:
 	pop	%bp
 	lret
 
-/* draw one aligned glyph byte onto each planar scan line, set/reset and foreground already set, args 6(BP) first A000 offset, 8(BP) near glyph row pointer, 10(BP) row count */
+/* draw one aligned planar glyph */
 	.section .fartext.gem_pc_planar_glyph_rows,"ax",@progbits
 	.global	gem_pc_planar_glyph_rows
 gem_pc_planar_glyph_rows:
@@ -398,7 +426,7 @@ gem_pc_planar_glyph_rows:
 	pop	%bp
 	lret
 
-/* draw an aligned text run straight from the 8x16 system font, if adding the font base offset carries then adding 1000h to the segment keeps the same real-mode address, args 6(BP) first A000 offset, 8(BP) near character pointer, 10(BP) count 1..80, 12(BP) stride (one or two), 14(BP) font segment, 16(BP) font offset */
+/* draw one aligned system-font run */
 	.global	gem_pc_planar_text_run
 gem_pc_planar_text_run:
 	push	%bp

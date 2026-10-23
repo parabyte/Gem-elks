@@ -76,15 +76,15 @@ GLOBAL BYTE		ctrl_cnts[] =
 	0, 0, 0, 			/* func 007		*/
 	0, 0, 0, 			/* func 008		*/
 	0, 0, 0, 			/* func 009		*/
-/* Process Manager		*/
-	2, 2, 2, 			/* func 060 proc_create */
-	3, 1, 2, 			/* func 061 proc_run	*/
-	1, 1, 0, 			/* func 062 proc_delete */
-	1, 3, 0, 			/* func 063 proc_info	*/
-	0, 1, 1, 			/* func 064 proc_malloc */
-	1, 1, 0, 			/* func 065 proc_mfree	*/
-	1, 1, 0, 			/* func 066 proc_switch */
-	1, 1, 0, 			/* func 067 proc_shrink */
+/* ELKS owns processes and memory */
+	0, 0, 0, 			/* func 060		*/
+	0, 0, 0, 			/* func 061		*/
+	0, 0, 0, 			/* func 062		*/
+	0, 0, 0, 			/* func 063		*/
+	0, 0, 0, 			/* func 064		*/
+	0, 0, 0, 			/* func 065		*/
+	0, 0, 0, 			/* func 066		*/
+	0, 0, 0, 			/* func 067		*/
 	0, 0, 0, 			/* func 008		*/
 	0, 0, 0, 			/* func 009		*/
 /* Graphics Manager	*/

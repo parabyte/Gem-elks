@@ -35,7 +35,7 @@
 /* the five style bits vst_effects itself accepts */
 #define GEM_VDI_STYLE_MASK	0x001f
 
-/* table sizes. a face keeps one name, every size and style of that face is a separate font record */
+/* fixed font-table sizes */
 #define GEM_VDI_FONTS		24
 #define GEM_VDI_FACES		8
 #define GEM_VDI_FONT_NAME	32
@@ -69,18 +69,21 @@ typedef struct gem_vdi_font {
 	UWORD form_width;	/* bytes across one row of the strip */
 	UWORD form_height;	/* rows in the strip */
 
-	/* data_segment is zero for a font thats not resident. the system font carries the resident's own segment and rom_rows nonzero (one byte per row per glyph), a loaded .FNT carries its own far segment and the three table offsets inside it */
+	/* system and loaded font storage */
 	UWORD data_segment;
 	UWORD hor_offset;
 	UWORD off_offset;
 	UWORD dat_offset;
 	UWORD rom_rows;		/* nonzero: ROM layout, rom_rows per glyph */
+	UWORD rom_upper_segment;
+	UWORD rom_upper_offset;
 	UWORD face_index;	/* which name in the face table */
 	UWORD file_index;	/* which far allocation backs it, or 0xffff */
 } GEM_VDI_FONT;
 
-/* reset the chain to just the system font. rows is 16 on VGA, 14 on EGA and Hercules, 8 on CGA, the caller passes the segment and offset of the matching embedded system-font table */
-VOID gem_vdi_font_reset(UWORD rom_segment, UWORD rom_offset, UWORD rom_rows);
+/* reset the chain to the system font */
+VOID gem_vdi_font_reset(UWORD rom_segment, UWORD rom_offset,
+	UWORD rom_upper_segment, UWORD rom_upper_offset, UWORD rom_rows);
 
 /* the head of the chain, always the system font */
 GEM_VDI_FONT *gem_vdi_font_first(VOID);
@@ -95,16 +98,16 @@ UWORD gem_vdi_font_size_count(VOID);
 /* the 32-byte nul-padded face name for a one-based face index */
 const BYTE *gem_vdi_font_face_name(UWORD index, UWORD *face_id);
 
-/* where vst_load_fonts looks for *.FNT. the resident sets this from the AES's own search path instead of writing a directory here */
+/* set the *.FNT directory */
 VOID gem_vdi_font_set_directory(const BYTE *path);
 
-/* load every *.FNT in that directory not already in the chain. returns the number of extra faces, like vst_load_fonts does */
+/* load new *.FNT faces from the directory */
 WORD gem_vdi_font_load_all(VOID);
 
 /* drop every loaded font, leaving only the system font */
 VOID gem_vdi_font_unload_all(VOID);
 
-/* read one glyph's rows out of a font into rows[], which must hold GEM_VDI_FONT_MAX_ROWS entries of stride bytes. returns the glyph width in pixels, zero when the code isnt in the font. bits are left aligned in each row, bit 7 of rows[r * stride] is the leftmost pixel */
+/* read one glyph into a fixed row buffer */
 UWORD gem_vdi_font_glyph(const GEM_VDI_FONT *font, UWORD character,
 	GEM_VDI_UBYTE *rows, UWORD stride);
 

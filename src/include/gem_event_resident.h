@@ -13,9 +13,8 @@
 #define ELKS_GEM_EVENT_RESIDENT_H
 
 #include "gem_bindings_elks.h"
+#include "gem_channels.h"
 
-/* GEM/XM has twelve logical process channels */
-#define GEM_EVENT_PD_COUNT             6U
 #define GEM_EVENT_KEY_QUEUE_WORDS      8U
 
 /* the GEM event selector values */
@@ -36,10 +35,10 @@
 #define GEM_EVENT_MU_TIMER             0x0020U
 #define GEM_EVENT_MU_ALL               0x003fU
 
-/* same value as the AES broker's sleep result */
+/* deferred socket reply */
 #define GEM_EVENT_RESIDENT_DEFERRED    (-32768)
 
-/* input sample with this tag belongs to no attached process */
+/* input sample with no attached client */
 #define GEM_EVENT_OWNER_NONE           0xffffU
 
 /* EVNT_MULTI has the biggest result array */
@@ -54,7 +53,7 @@ typedef struct gem_event_rectangle {
 	WORD height;
 } GEM_EVENT_RECTANGLE;
 
-/* one nonblocking VDI input sample. a ready key goes in the owner PD's eight-word ring, a full queue drops it */
+/* one nonblocking VDI input sample */
 typedef struct gem_event_input {
 	UWORD owner;
 	UWORD generation_lo;
@@ -67,7 +66,7 @@ typedef struct gem_event_input {
 	UBYTE key_ready;
 } GEM_EVENT_INPUT;
 
-/* one call, after the arrays were copied from the pinned client. message_ready describes the owner's GEM message queue, the queue itself is never copied */
+/* one copied client call */
 typedef struct gem_event_call {
 	UWORD owner;
 	UWORD generation_lo;
@@ -79,13 +78,13 @@ typedef struct gem_event_call {
 	UBYTE message_ready;
 } GEM_EVENT_CALL;
 
-/* the outer AES does the message read before replying. every GEM message is eight words, the destination is the client's offset/segment pair */
+/* one deferred eight-word message copy */
 typedef struct gem_event_effects {
 	GEM_BINDINGS_POINTER_SLOT message_address;
 	UBYTE read_message;
 } GEM_EVENT_EFFECTS;
 
-/* a delayed result, the core copies output_count words to the parked client's int_out, applies the effects, then replies */
+/* one delayed event result */
 typedef struct gem_event_completion {
 	UWORD owner;
 	UWORD generation_lo;
@@ -97,7 +96,7 @@ typedef struct gem_event_completion {
 
 VOID gem_event_resident_reset(VOID);
 
-/* set the physical timer step, used only for GEM's three-tick click-window extension. milliseconds, nonzero */
+/* set the nonzero timer step in milliseconds */
 WORD gem_event_resident_configure_tick(UWORD tick_milliseconds);
 
 /* remove one exact PD generation, its key queue and pending wait */
@@ -110,11 +109,11 @@ WORD gem_event_resident_input(const GEM_EVENT_INPUT *input);
 /* advance armed timers, elapsed is milliseconds, never zero */
 VOID gem_event_resident_tick(UWORD elapsed_milliseconds);
 
-/* dispatch selectors 20 through 26. immediate calls write int_out and return the classic result. a real wait returns GEM_EVENT_RESIDENT_DEFERRED with *handled TRUE, an unknown selector sets *handled FALSE */
+/* dispatch EVNT selectors 20 through 26 */
 WORD gem_event_resident_dispatch(const GEM_EVENT_CALL *call,
 	GEM_EVENT_EFFECTS *effects, WORD *handled);
 
-/* recheck one parked owner after input, timer or message progress. TRUE produces one completion and clears that PD's wait */
+/* recheck one parked event call */
 WORD gem_event_resident_service(UWORD owner, UWORD generation_lo,
 	UWORD generation_hi, UBYTE message_ready,
 	GEM_EVENT_COMPLETION *completion);

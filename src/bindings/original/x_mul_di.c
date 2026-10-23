@@ -26,7 +26,7 @@ EXTERN WORD x_hmicrons;
  * division one bit at a time.  The result is an unscaled integer truncated
  * toward zero.  A zero divisor returns zero.  Overflow saturates to -32768 or
  * 32767 at this signed-word interface.  Keeping the helper self-contained also
- * lets a trap-linked Desktop use this original closure without pulling in the
+ * lets Desktop use this original closure without pulling in the
  * resident AES implementation and its duplicate public binding symbols.
  *
  ******************************************************************************/

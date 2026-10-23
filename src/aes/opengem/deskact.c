@@ -600,12 +600,7 @@ WORD act_chg(WORD wh, LPTREE tree, WORD root, WORD obj, GRECT *pc,
 						/*   screen		*/
 	if ( old_state != curr_state )
 	{
-	  /*
-	   * This Desktop owns the shallow g_screen object and performs the clipped
-	   * redraw immediately below.  The former redraw=FALSE OBJC_CHANGE crossed
-	   * INT EF only to validate the entire tree and write this same state word.
-	   * act_allchg() already uses the identical direct original GEM update.
-	   */
+	  /* update the Desktop-owned object */
 	  object->ob_state = curr_state;
 						/* clip to uncovered 	*/
 						/*   portion desktop or	*/

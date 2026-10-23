@@ -8,6 +8,8 @@
  * is loaded into the one physical adapter before drawing
  */
 
+#include <errno.h>
+
 #include "gem_resident_memory.h"
 #include "gem_vdi_palette.h"
 #include "gem_vdi_internal.h"
@@ -33,6 +35,8 @@ static BYTE gem_vdi_resident_text_buffer[GEM_VDI_RESIDENT_TEXT_MAX];
 GEM_VDI_UBYTE gem_vdi_system_glyph[GEM_VDI_SYSTEM_GLYPH_BYTES];
 UWORD gem_vdi_font_segment;
 UWORD gem_vdi_font_offset;
+UWORD gem_vdi_font_upper_segment;
+UWORD gem_vdi_font_upper_offset;
 UWORD gem_vdi_font_rows = 16U;
 
 VOID
@@ -157,22 +161,19 @@ VOID
 gem_vdi_apply_workstation(GEM_VDI_RESIDENT_WORKSTATION *workstation,
 	WORD logical_color)
 {
-	GEM_VDI_RECT clip;
-
 	gem_vdi_set_mode(gem_vdi_resident_mode(workstation->write_mode));
 	gem_vdi_set_foreground(gem_vdi_screen,
 		gem_vdi_resident_color(logical_color));
 	gem_vdi_set_background(gem_vdi_screen,
 		gem_vdi_resident_color(GEM_VDI_WHITE));
 	if (!workstation->clip_on) {
-		gem_vdi_set_clip(gem_vdi_screen, 0, NULL);
+		gem_vdi_set_clip(gem_vdi_screen, 0, 0, 0, 0, 0);
 		return;
 	}
-	clip.x = workstation->clip_x1;
-	clip.y = workstation->clip_y1;
-	clip.width = workstation->clip_x2 - workstation->clip_x1 + 1;
-	clip.height = workstation->clip_y2 - workstation->clip_y1 + 1;
-	gem_vdi_set_clip(gem_vdi_screen, 1, &clip);
+	gem_vdi_set_clip(gem_vdi_screen, 1,
+		workstation->clip_x1, workstation->clip_y1,
+		workstation->clip_x2 - workstation->clip_x1 + 1,
+		workstation->clip_y2 - workstation->clip_y1 + 1);
 }
 
 WORD
@@ -281,7 +282,7 @@ static WORD __attribute__((optimize("Os")))
 }
 
 static WORD
-gem_vdi_dispatch(const struct gemtrap_request *request, WORD application)
+gem_vdi_dispatch(const struct gem_request *request, WORD application)
 {
 	GEM_VDI_RESIDENT_WORKSTATION *workstation;
 	GEM_VDI_RECT screen_rect;
@@ -804,6 +805,7 @@ WORD __attribute__((optimize("Os")))
 	GEM_VDI_COORD mouse_y;
 	GEM_VDI_WORD mouse_buttons;
 	UWORD owner_segment;
+	UWORD wanted_rows;
 
 	/* safe to repeat, the screen geometry exists before anything opens */
 	if (gem_vdi_screen)
@@ -812,31 +814,27 @@ WORD __attribute__((optimize("Os")))
 		::"memory");
 	screen = gem_vdi_open();
 	__asm__ volatile ("movw %0,%%ds"::"r" (owner_segment):"memory");
-	if (!screen)
+	if (!screen) {
+		errno = ENODEV;
 		return FALSE;
+	}
 	gem_vdi_screen = screen;
-	/* use the GEM system font, not the adapter ROM font (CGA and Hercules
-	 * have none, and none matches the GEM furniture shapes), the cell is
-	 * sized to the screen: 8x8 on 200-line CGA, 8x14 on 348/350-line EGA and
-	 * Hercules, 8x16 on 480-line VGA */
 	if (gem_vdi_screen->yres <= 200)
-		gem_vdi_font_rows = 8U;
+		wanted_rows = 8U;
 	else if (gem_vdi_screen->yres <= 350)
-		gem_vdi_font_rows = 14U;
+		wanted_rows = 14U;
 	else
-		gem_vdi_font_rows = 16U;
-	/* load the system font into its own far segment, a missing font file is
-	 * fatal (no ROM-font fallback) so bring the display back and fail the
-	 * open, the server reports it and exits */
-	if (!gem_vdi_sysfont_load(gem_vdi_font_rows, &gem_vdi_font_segment,
-			&gem_vdi_font_offset)) {
+		wanted_rows = 16U;
+	if (!gem_pc_video_font(wanted_rows, &gem_vdi_font_rows,
+			&gem_vdi_font_segment, &gem_vdi_font_offset,
+			&gem_vdi_font_upper_segment,
+			&gem_vdi_font_upper_offset)) {
 		gem_vdi_close(gem_vdi_screen);
 		gem_vdi_screen = (GEM_VDI_SCREEN *) 0;
 		return FALSE;
 	}
-	/* bind the font chain to that segment, the system font is the head of
-	 * the chain and the default face, any *.FNT gets linked after it */
 	gem_vdi_text_init(gem_vdi_font_segment, gem_vdi_font_offset,
+		gem_vdi_font_upper_segment, gem_vdi_font_upper_offset,
 		gem_vdi_font_rows);
 	gem_vdi_cursor_hot_x = 0;
 	gem_vdi_cursor_hot_y = 0;
@@ -849,7 +847,7 @@ WORD __attribute__((optimize("Os")))
 	gem_vdi_set_mode(GEM_VDI_REPLACE);
 	gem_vdi_set_foreground(gem_vdi_screen,
 		gem_vdi_resident_color(GEM_VDI_WHITE));
-	gem_vdi_set_clip(gem_vdi_screen, 0, NULL);
+	gem_vdi_set_clip(gem_vdi_screen, 0, 0, 0, 0, 0);
 	gem_vdi_fill_rect(gem_vdi_screen, 0, 0, gem_vdi_screen->xres,
 		gem_vdi_screen->yres);
 
@@ -978,7 +976,7 @@ gem_vdi_resident_poll_input(GEM_VDI_RESIDENT_INPUT *input)
 }
 
 WORD
-gem_vdi_resident_request(struct gemtrap_request *request, WORD application)
+gem_vdi_resident_request(struct gem_request *request, WORD application)
 {
 	GEM_BINDINGS_VDIPB parameter_block;
 	UWORD owner_segment;
@@ -1094,6 +1092,8 @@ VOID __attribute__((optimize("Os")))
 	gem_vdi_text_unload_fonts();
 	gem_vdi_font_segment = 0;
 	gem_vdi_font_offset = 0;
+	gem_vdi_font_upper_segment = 0;
+	gem_vdi_font_upper_offset = 0;
 	if (gem_vdi_screen) {
 		gem_vdi_close(gem_vdi_screen);
 		gem_vdi_screen = NULL;

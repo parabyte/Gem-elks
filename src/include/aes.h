@@ -27,10 +27,10 @@
 #define LBSET(p,v)     (*(BYTE *)(p) = (v))
 
 /*
- * With GEM_TRAP_FAR_DATA pointers carry a real offset:segment pair;
+ * With GEM_FAR_DATA pointers carry a real offset:segment pair;
  * otherwise a near offset with a zero segment.
  */
-#if GEM_TRAP_FAR_DATA
+#if GEM_FAR_DATA
 #define FP_OFF(p)      ((WORD) gem_near_pointer_words(\
 				(const void FAR *)(p)).lo)
 #define FP_SEG(p)      ((WORD) gem_near_pointer_words(\

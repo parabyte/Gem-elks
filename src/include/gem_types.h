@@ -65,16 +65,12 @@ typedef struct __attribute__((packed)) gem_u32_words {
 #ifndef VOID
 #define VOID    void
 #endif
-/*
- * GEM_TRAP_FAR_DATA brings back far data pointers for the trap-linked
- * original Desktop, whose resource blocks live in resident far
- * segments.  Everything else stays near.
- */
+/* Desktop resources use far pointers */
 #undef FAR
 #undef NEAR
 #undef far
 #undef near
-#if GEM_TRAP_FAR_DATA
+#if GEM_FAR_DATA
 #define FAR     __far
 #define NEAR			/* primary-data pointer */
 #define far     __far

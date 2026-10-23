@@ -1,8 +1,6 @@
-/* JCE 1-3-1998: replaces VDIASM.ASM. ELKS enters INT EFh directly. */
+/* VDI calls over the stock ELKS UNIX socket */
 
 #include "ppdgem.h"
-
-#define GEM_VECTOR_OFFSET 0x03bcU
 
 #ifndef USER_INTIN
 GLOBAL WORD contrl[11];
@@ -28,7 +26,7 @@ gem_bindings_vdi_ensure(VOID)
 	if (pblock_ready)
 		return;
 
-	/* point the trap block at the static arrays */
+	/* point the request block at the static arrays */
 	gem_bindings_store_pointer(&pblock.contrl, contrl);
 	gem_bindings_store_pointer(&pblock.intin, intin);
 	gem_bindings_store_pointer(&pblock.ptsin, ptsin);
@@ -49,36 +47,12 @@ gem_bindings_vdi_set_slot(GEM_BINDINGS_POINTER_SLOT *slot,
 WORD
 vdi(VOID)
 {
-	UWORD offset;
-	UWORD selector;
-	WORD result;
-
 	gem_bindings_vdi_ensure();
-	/* CX=0473h, DS:DX=parameter block */
-	offset = (UWORD) &pblock;
-	selector = 0x0473U;
-	__asm__ volatile ("int $0xef"
-			  : "=a" (result), "+c" (selector), "+d" (offset)
-			  :
-			  : "cc", "memory");
-	return result;
+	return gem_bindings_call(0x0473U, (UWORD) &pblock);
 }
 
 WORD
 gemcheck(VOID)
 {
-	UWORD target_offset;
-	UWORD target_segment;
-
-	target_offset = gem_bindings_far_word(0, GEM_VECTOR_OFFSET);
-	target_segment = gem_bindings_far_word(0, GEM_VECTOR_OFFSET + 2);
-	target_offset += 2;
-
-	if (gem_bindings_far_byte(target_segment, target_offset++) != (UBYTE) 'G')
-		return FALSE;
-	if (gem_bindings_far_byte(target_segment, target_offset++) != (UBYTE) 'E')
-		return FALSE;
-	if (gem_bindings_far_byte(target_segment, target_offset) != (UBYTE) 'M')
-		return FALSE;
-	return TRUE;
+	return gem_bindings_connect();
 }

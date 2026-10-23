@@ -30,7 +30,7 @@
  * 
  * ViewMAX history: 
  *
- * $Header: m:/davinci/users//groups/panther/dsk/rcs/desktype.c 4.6 92/04/06 09:44:01 Fontes Stable $
+ * DESKTYPE.C
 * $Log:	desktype.c $
  * Revision 4.6  92/04/06  09:44:01  Fontes
  * Initial cut to extract/display Windows exe embedded icons.
@@ -115,7 +115,7 @@ typedef GEM_U32_WORDS SLONG;
  * explicit low/high halves only because the ELKS seek ABI requires them.
  *
  * This storage is static because Show Contents is modal in Desktop.  There is
- * no heap allocation, no conversion process, and no wrapper file.  Text is
+ * no heap allocation or conversion. Text is
  * rendered directly; a page containing a NUL or an unexpected control byte
  * starts in hexadecimal mode.  Ctrl-T can always switch either way.
  */
@@ -1383,7 +1383,7 @@ MLOCAL WORD window_column;              /* Number of first column displayed
 MLOCAL SLONG window_row;                /* Number of first row displayed in
                                            window, 0 if first line in file */
 MLOCAL BOOLEAN quit_flag;               /* Set true when quit selected */
-MLOCAL WORD return_value;       /* Set with error code or TRUE to terminate program */
+MLOCAL WORD return_value;       /* result or stop */
 
 MLOCAL void handle_key(UWORD key, WORD wh);
 

@@ -237,18 +237,23 @@ const GEM_VDI_UBYTE *
 gem_vdi_system_glyph_rows(WORD character)
 {
 	UWORD glyph_offset;
+	UWORD glyph_segment;
+	UWORD glyph_index;
 	UWORD row;
 
-	/* the system font is one byte per row per glyph, gem_vdi_font_rows rows
-	 * to a cell (8 on CGA, 14 on EGA and Hercules, 16 on VGA), every code is
-	 * a glyph, pad short cells so callers always get a full
-	 * GEM_VDI_SYSTEM_GLYPH_BYTES-row glyph */
 	if (!gem_vdi_font_segment)
 		return NULL;
-	glyph_offset = (UWORD) (((UWORD) character & 0x00ffU)
-		* gem_vdi_font_rows);
-	glyph_offset = (UWORD) (glyph_offset + gem_vdi_font_offset);
-	gem_resident_memory_from(gem_vdi_font_segment, glyph_offset,
+	glyph_index = (UWORD) character & 0x00ffU;
+	glyph_segment = gem_vdi_font_segment;
+	glyph_offset = gem_vdi_font_offset;
+	if (glyph_index >= 128U && gem_vdi_font_upper_segment) {
+		glyph_index = (UWORD) (glyph_index - 128U);
+		glyph_segment = gem_vdi_font_upper_segment;
+		glyph_offset = gem_vdi_font_upper_offset;
+	}
+	glyph_offset = (UWORD) (glyph_offset
+		+ glyph_index * gem_vdi_font_rows);
+	gem_resident_memory_from(glyph_segment, glyph_offset,
 		gem_vdi_system_glyph, gem_vdi_font_rows);
 	for (row = gem_vdi_font_rows; row < GEM_VDI_SYSTEM_GLYPH_BYTES; row++)
 		gem_vdi_system_glyph[row] = 0;
@@ -491,7 +496,7 @@ gem_vdi_dispatch_gdp(GEM_VDI_RESIDENT_WORKSTATION *workstation)
 
 WORD
 gem_vdi_screen_copy(GEM_VDI_RESIDENT_WORKSTATION *workstation,
-	const struct gemtrap_request *request)
+	const struct gem_request *request)
 {
 	GEM_BINDINGS_POINTER_SLOT source_pointer;
 	GEM_BINDINGS_POINTER_SLOT destination_pointer;
@@ -636,7 +641,7 @@ static VOID __attribute__((optimize("Os")))
  * transform is just a checked memmove
  */
 WORD __attribute__((optimize("Os")))
-	gem_vdi_transform_form(const struct gemtrap_request *request)
+	gem_vdi_transform_form(const struct gem_request *request)
 {
 	GEM_BINDINGS_POINTER_SLOT source_pointer;
 	GEM_BINDINGS_POINTER_SLOT destination_pointer;

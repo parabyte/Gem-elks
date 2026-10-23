@@ -11,12 +11,13 @@
 
 #include "gem_vdi_font.h"
 
-/* widest and tallest composed cell. a 32-pixel cell doubled with skew and thicken padding still fits 64 across */
+/* largest composed text cell */
 #define GEM_VDI_TEXT_CELL_BYTES	8
 #define GEM_VDI_TEXT_CELL_ROWS	64
 
 /* bind the chain to the adapter ROM font and pick the default face */
-VOID gem_vdi_text_init(UWORD rom_segment, UWORD rom_offset, UWORD rom_rows);
+VOID gem_vdi_text_init(UWORD rom_segment, UWORD rom_offset,
+	UWORD rom_upper_segment, UWORD rom_upper_offset, UWORD rom_rows);
 
 /* vst_height: size given in pixels above the baseline */
 VOID gem_vdi_text_set_height(WORD pixels, UWORD *ptsout);
@@ -53,10 +54,10 @@ VOID gem_vdi_text_cell(UWORD *width, UWORD *height);
 UWORD gem_vdi_text_face_count(VOID);
 UWORD gem_vdi_text_size_count(VOID);
 
-/* nonzero when the selected font is the plain unstyled ROM face, so the caller may take its aligned whole-string fast path */
+/* true for the plain system font */
 WORD gem_vdi_text_is_plain(VOID);
 
-/* V_JUSTIFIED padding, kept the way the original spread it: a whole number of pixels per gap, then one extra pixel on the first EXTRA gaps, with SIGN carrying the direction when the string has to shrink not stretch */
+/* V_JUSTIFIED gap spacing */
 typedef struct gem_vdi_text_justify {
 	WORD word_delta;
 	WORD word_extra;
@@ -65,19 +66,19 @@ typedef struct gem_vdi_text_justify {
 	WORD sign;
 } GEM_VDI_TEXT_JUSTIFY;
 
-/* measure a string like vqt_extent does, without touching the saved extent. used to work out the v_justified padding */
+/* measure without changing the saved extent */
 WORD gem_vdi_text_string_width(const UWORD *characters, UWORD count);
 
-/* draw one string. x and y are the alignment point in device coords. JUSTIFY is null for ordinary v_gtext */
+/* draw one aligned string */
 VOID gem_vdi_text_draw(GEM_VDI_SCREEN *screen, WORD x, WORD y,
 	const UWORD *characters, UWORD count,
 	const GEM_VDI_TEXT_JUSTIFY *justify);
 
-/* VQT_JUSTIFIED: the running offset of every character of a justified string, along the text direction. fills one point per character and returns how many were written */
+/* return each justified character offset */
 UWORD gem_vdi_text_justified_offsets(const UWORD *characters, UWORD count,
 	const GEM_VDI_TEXT_JUSTIFY *justify, UWORD *ptsout, UWORD points);
 
-/* underline extent for the caller's own rectangle fill, returns zero when the current effects dont include UNDER */
+/* return the current underline extent */
 WORD gem_vdi_text_underline(WORD *x1, WORD *y1, WORD *x2, WORD *y2);
 
 #endif				/* ELKS_GEM_VDI_TEXT_H */

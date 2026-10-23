@@ -60,15 +60,6 @@
 #define FORM_CENTER 54
 #define FORM_KEYBD 55
 #define FORM_BUTTON 56
-                                /* Process Manager                      */
-#define PROC_CREATE 60
-#define PROC_RUN 61
-#define PROC_DELETE 62
-#define PROC_INFO 63
-#define PROC_MALLOC 64
-#define PROC_SWITCH 66
-#define PROC_SHRINK 67
-
 				/* Graphics Manager			*/
 #define GRAF_RUBBOX 70
 #define GRAF_DRAGBOX 71
@@ -358,25 +349,6 @@
 
 #define OB_NEWSTATE int_in[6]		/* ob_change			*/
 #define OB_REDRAW int_in[7]
-					/* process library parameters */
-#define PR_ISSWAP int_in[0]             /* proc_create  */
-#define PR_ISGEM int_in[1]
-#define PR_IBEGADDR addr_in[0]
-#define PR_ISIZE addr_in[1]
-#define PR_ONUM int_out[1]
-#define PR_NUM int_in[0]                /* proc_run     */
-#define PR_ISGRAF int_in[1]
-#define PR_ISOVER int_in[2]
-#define PR_PCMD addr_in[0]
-#define PR_PTAIL addr_in[1]
-#define PR_OISSWAP int_out[1]           /* proc_info    */
-#define PR_OISGEM int_out[2]
-#define PR_OBEGADDR addr_out[0]
-#define PR_OCSIZE addr_out[1]
-#define PR_OENDMEM addr_out[2]
-#define PR_OSSIZE addr_out[3]
-#define PR_OITBL addr_out[4]
-#define PR_IASIZE addr_in[0]            /* proc_malloc  */
 
 					/* graphics library parameters	*/
 #define GR_I1 int_in[0]

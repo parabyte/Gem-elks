@@ -43,13 +43,7 @@ GLOBAL OBJECT	gl_sampob[2] =
 /* First item slot to examine; every value is an unscaled OBJECT index. */
 static WORD gl_next_item = NUM_WNODES + 2;
 
-/*
- * Direct original GEMOBLIB.C ob_add() semantics for the Desktop-owned fixed
- * g_screen tree.  The resident AES must validate arbitrary application trees,
- * but these parent and child indexes refer to this client's already-bounded
- * NUM_SOBS array.  Updating the four original links here avoids an INT EF
- * round trip and a complete resident tree validation for every visible file.
- */
+/* add one object to Desktop's fixed tree */
 static WORD
 obj_add_local(WORD parent, WORD child)
 {
@@ -187,6 +181,7 @@ obj_ialloc(wparent, x, y, w, h)
 	if (gl_next_item < NUM_WNODES + 2 || gl_next_item >= NUM_SOBS)
 		gl_next_item = NUM_WNODES + 2;
 	ii = gl_next_item;
+	object = &G.g_screen[ii];
 	remaining = NUM_SOBS - (NUM_WNODES + 2);
 	while (remaining--)
 	{

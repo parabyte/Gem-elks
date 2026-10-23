@@ -706,7 +706,7 @@ gem_menu_object_resident_bar_rule(WORD line_y)
 	screen = gem_vdi_resident_screen();
 	if (!screen || line_y < 0 || line_y >= screen->yres)
 		return FALSE;
-	gem_vdi_set_clip(screen, 0, NULL);
+	gem_vdi_set_clip(screen, 0, 0, 0, 0, 0);
 	gem_vdi_hide_cursor(screen);
 	gem_vdi_set_mode(GEM_VDI_REPLACE);
 	gem_vdi_set_foreground(screen, GEM_MENU_NATIVE_BLACK);
@@ -759,7 +759,7 @@ gem_menu_object_resident_bar(GEM_MENU_OBJECT_RESIDENT *menu,
 	bar->ob_width = (UWORD) (resource->metrics.screen_width - bar->ob_x);
 
 	/* clip off, hide cursor, draw, show cursor */
-	gem_vdi_set_clip(context.screen, 0, NULL);
+	gem_vdi_set_clip(context.screen, 0, 0, 0, 0, 0);
 	gem_vdi_hide_cursor(context.screen);
 	result = gem_menu_object_draw(&context, GEM_MENU_THEBAR,
 		GEM_MENU_MAX_DEPTH);

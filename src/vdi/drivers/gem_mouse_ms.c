@@ -12,7 +12,7 @@
 static GEM_VDI_UBYTE gem_ms_packet[3];
 static GEM_VDI_UBYTE gem_ms_packet_count;
 
-/* the header byte holds the two high movement bits in odd spots, these tables place them */
+/* place the high movement bits */
 static const GEM_VDI_UBYTE gem_ms_x_high[4] = {
 	0x00, 0x40, 0x80, 0xc0
 };

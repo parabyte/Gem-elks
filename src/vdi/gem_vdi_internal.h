@@ -242,15 +242,10 @@ extern UWORD gem_vdi_ptsout[GEM_VDI_PTSOUT_WORDS];
 extern GEM_VDI_SCREEN *gem_vdi_screen;
 extern UWORD gem_vdi_font_segment;
 extern UWORD gem_vdi_font_offset;
+extern UWORD gem_vdi_font_upper_segment;
+extern UWORD gem_vdi_font_upper_offset;
 extern UWORD gem_vdi_font_rows;
 extern GEM_VDI_UBYTE gem_vdi_system_glyph[GEM_VDI_SYSTEM_GLYPH_BYTES];
-
-/*
- * read the GEM system face for a cell height of 8, 14 or 16 rows off disk
- * (gem_vdi_sysfont.c) into its own far segment, returns its segment and offset,
- * FALSE means the file is missing or short
- */
-WORD gem_vdi_sysfont_load(UWORD rows, UWORD *segment, UWORD *offset);
 
 /* load one client workstation's attributes into the adapter */
 VOID gem_vdi_apply_workstation(GEM_VDI_RESIDENT_WORKSTATION * workstation,
@@ -272,8 +267,8 @@ WORD gem_vdi_draw_text(GEM_VDI_RESIDENT_WORKSTATION * workstation,
 WORD gem_vdi_draw_markers(GEM_VDI_RESIDENT_WORKSTATION * workstation);
 WORD gem_vdi_dispatch_gdp(GEM_VDI_RESIDENT_WORKSTATION * workstation);
 WORD gem_vdi_screen_copy(GEM_VDI_RESIDENT_WORKSTATION * workstation,
-	const struct gemtrap_request *request);
-WORD gem_vdi_transform_form(const struct gemtrap_request *request);
+	const struct gem_request *request);
+WORD gem_vdi_transform_form(const struct gem_request *request);
 const GEM_VDI_UBYTE *gem_vdi_system_glyph_rows(WORD character);
 WORD gem_vdi_text_has_furniture(const GEM_VDI_UBYTE *characters, UWORD count,
 	UWORD stride);

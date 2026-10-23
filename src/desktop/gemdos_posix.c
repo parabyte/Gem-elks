@@ -1,10 +1,4 @@
-/*
- * gemdos_posix.c - the Desktop's dos_* file calls over ELKS syscalls
- *
- * every dos_* file call goes straight to its ELKS syscall, was just too much work
- * to make userfacing apps posix, happy for someone to help! its very low on my agenda, as i wish to try and stay
- * source compatible with gem
- */
+/* keep the Desktop source API and call ELKS for every file operation */
 
 #include "dos.h"
 
@@ -16,7 +10,6 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #undef PATH_MAX
@@ -130,11 +123,8 @@ static const UBYTE dos_month_days[13] = {
 
 static const GEM_U32_WORDS dos_zero_words = { 0, 0 };
 
-union REGS DR;
+UWORD DOS_AX;
 WORD DOS_ERR;
-
-/* last Desktop error word */
-#define DOS_AX DR.x.ax
 
 static LPVOID current_dta;
 static FCB fallback_dta;
@@ -1139,23 +1129,6 @@ dos_lseek(WORD handle, WORD smode, GEM_U32_WORDS sofst)
 }
 
 WORD
-dos_wait(VOID)
-{
-	WORD result;
-	int status;
-
-	do {
-		result = (WORD) wait(&status);
-	} while (result < 0 && errno == EINTR);
-	if (result < 0) {
-		dos_finish_syscall(result);
-		return (WORD) DOS_AX;
-	}
-	dos_set_error(0);
-	return (WORD) status;
-}
-
-WORD
 dos_space(WORD drv, GEM_U32_WORDS *ptotal, GEM_U32_WORDS *pavail)
 {
 	GEM_U32_WORDS total;
@@ -1264,29 +1237,4 @@ dos_executable(LPBYTE path)
 		return FALSE;
 	mode = (UWORD) native.st_mode;
 	return (mode & (UWORD) (S_IXUSR | S_IXGRP | S_IXOTH)) != 0;
-}
-
-int
-int86(int vec, union REGS *inregs, union REGS *outregs)
-{
-	(void) vec;
-	(void) inregs;
-	if (outregs) {
-		memset(outregs, 0, sizeof(*outregs));
-		outregs->x.ax = E_BADFUNC;
-		outregs->x.cflag = 1;
-	}
-	return E_BADFUNC;
-}
-
-int
-intdos(union REGS *inregs, union REGS *outregs)
-{
-	(void) inregs;
-	if (outregs) {
-		memset(outregs, 0, sizeof(*outregs));
-		outregs->x.ax = E_BADFUNC;
-		outregs->x.cflag = 1;
-	}
-	return E_BADFUNC;
 }

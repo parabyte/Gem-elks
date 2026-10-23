@@ -137,12 +137,6 @@ static WORD columns, pane_columns, input_columns;
 static WORD tree_row[GEM_IRC_APP_BUFFERS];
 static WORD menu_x[IRC_MENU_COUNT + 1U];
 
-/* what the transcript shows now, to draw only what a change adds */
-static WORD shown_active = -1;
-static UWORD shown_appended;
-static UWORD shown_count;
-static UWORD shown_scroll;
-
 static GEM_IRC_APP irc_app;
 static GEM_IRC_TRANSPORT irc_transport;
 
@@ -265,8 +259,8 @@ irc_configuration(WORD argc, BYTE **argv)
 	const BYTE *nick;
 	const BYTE *port_text;
 
-	server = (const BYTE *) "irc.starlink-irc.org";
-	channel = (const BYTE *) "#asperger";
+	server = (const BYTE *) "irc.libera.chat";
+	channel = (const BYTE *) "#osdev";
 	nick = (const BYTE *) 0;
 	port_text = (const BYTE *) 0;
 	irc_smoke_enabled = 0;
@@ -364,7 +358,6 @@ irc_layout(VOID)
 	xy[2] = wkx + wkw - 1;
 	xy[3] = wky + wkh - 1;
 	vs_clip(irc_vdi, TRUE, xy);
-	shown_active = -1;
 }
 
 static WORD
@@ -406,25 +399,6 @@ irc_vdi_line(WORD x1, WORD y1, WORD x2, WORD y2, WORD color)
 	xy[3] = y2;
 	(void) vsl_color(irc_vdi, color);
 	(void) v_pline(irc_vdi, 2, xy);
-}
-
-static VOID
-irc_vdi_copy(WORD x, WORD y, WORD width, WORD height, WORD to_x, WORD to_y)
-{
-	static MFDB screen;
-	WORD xy[8];
-
-	if (width <= 0 || height <= 0)
-		return;
-	xy[0] = x;
-	xy[1] = y;
-	xy[2] = x + width - 1;
-	xy[3] = y + height - 1;
-	xy[4] = to_x;
-	xy[5] = to_y;
-	xy[6] = to_x + width - 1;
-	xy[7] = to_y + height - 1;
-	(void) vro_cpyfm(irc_vdi, S_ONLY, xy, &screen, &screen);
 }
 
 static VOID
@@ -587,37 +561,11 @@ irc_draw_rows(WORD first, WORD last)
 	}
 }
 
-/* scroll unchanged rows, then draw new rows */
+/* draw the transcript from its model */
 static VOID
 irc_draw_transcript(VOID)
 {
-	UWORD appended, count, scroll, before, after, added;
-	WORD shift;
-
-	appended = gem_irc_app_appended(&irc_app);
-	count = gem_irc_app_line_count(&irc_app);
-	scroll = gem_irc_app_scroll_offset(&irc_app);
-	added = appended - shown_appended;
-	before = shown_count < (UWORD) rows ? shown_count : (UWORD) rows;
-	after = count < (UWORD) rows ? count : (UWORD) rows;
-	if (shown_active == (WORD) gem_irc_app_active_index(&irc_app)
-		&& !scroll && !shown_scroll && added && added <= after
-		&& count >= shown_count) {
-		shift = (WORD) (added - (after - before));
-		if (shift > 0 && shift < rows)
-			irc_vdi_copy(text_x, body_y + shift * ch,
-				columns * cw, (rows - shift) * ch,
-				text_x, body_y);
-		if (shift < rows)
-			irc_draw_rows((WORD) (after - added), (WORD) after);
-		else
-			irc_draw_rows(0, rows);
-	} else
-		irc_draw_rows(0, rows);
-	shown_active = (WORD) gem_irc_app_active_index(&irc_app);
-	shown_appended = appended;
-	shown_count = count;
-	shown_scroll = scroll;
+	irc_draw_rows(0, rows);
 }
 
 static VOID
@@ -707,7 +655,6 @@ irc_draw_all(VOID)
 	irc_draw_menu_bar();
 	irc_draw_tree();
 	irc_draw_topic();
-	shown_active = -1;
 	irc_draw_transcript();
 	irc_draw_nicks();
 	irc_draw_input();
@@ -715,36 +662,67 @@ irc_draw_all(VOID)
 	irc_draw_menu_popup();
 }
 
-/* draw dirty regions, lock full redraws */
+static VOID
+irc_draw_dirty(UWORD dirty, WORD all)
+{
+	if (all) {
+		irc_draw_all();
+		return;
+	}
+	if (dirty & IRC_UI_DIRTY_MENU)
+		irc_draw_menu_bar();
+	if (dirty & GEM_IRC_APP_DIRTY_TOPIC) {
+		irc_draw_topic();
+		irc_draw_tree();
+	} else if (dirty & GEM_IRC_APP_DIRTY_TABS)
+		irc_draw_tree();
+	if (dirty & GEM_IRC_APP_DIRTY_TRANSCRIPT)
+		irc_draw_transcript();
+	if (dirty & (GEM_IRC_APP_DIRTY_ROSTER | GEM_IRC_APP_DIRTY_TARGET))
+		irc_draw_nicks();
+	if (dirty & GEM_IRC_APP_DIRTY_INPUT)
+		irc_draw_input();
+	if (irc_menu)
+		irc_draw_menu_popup();
+}
+
+/* draw exposed rectangles */
 static VOID
 irc_update(UWORD dirty, WORD all)
 {
+	GRECT work;
+	GRECT visible;
+	GRECT clip;
+	WORD xy[4];
+
 	if (!all && !dirty)
 		return;
-	if (all) {
-		wind_update(BEG_UPDATE);
-		irc_draw_all();
-		wind_update(END_UPDATE);
-		return;
-	}
-	{
-		if (dirty & IRC_UI_DIRTY_MENU)
-			irc_draw_menu_bar();
-		if (dirty & GEM_IRC_APP_DIRTY_TOPIC) {
-			irc_draw_topic();
-			irc_draw_tree();
-		} else if (dirty & GEM_IRC_APP_DIRTY_TABS)
-			irc_draw_tree();
-		if (dirty & GEM_IRC_APP_DIRTY_TRANSCRIPT)
-			irc_draw_transcript();
-		if (dirty & (GEM_IRC_APP_DIRTY_ROSTER | GEM_IRC_APP_DIRTY_TARGET)) {
-			irc_draw_nicks();
+	work.g_x = wkx;
+	work.g_y = wky;
+	work.g_w = wkw;
+	work.g_h = wkh;
+	wind_update(BEG_UPDATE);
+	wind_get(irc_window, WF_FIRSTXYWH, &visible.g_x, &visible.g_y,
+		&visible.g_w, &visible.g_h);
+	while (visible.g_w > 0 && visible.g_h > 0) {
+		clip = visible;
+		if (rc_intersect(&work, &clip)) {
+			xy[0] = clip.g_x;
+			xy[1] = clip.g_y;
+			xy[2] = clip.g_x + clip.g_w - 1;
+			xy[3] = clip.g_y + clip.g_h - 1;
+			vs_clip(irc_vdi, TRUE, xy);
+			irc_draw_dirty(dirty, all);
 		}
-		if (dirty & GEM_IRC_APP_DIRTY_INPUT)
-			irc_draw_input();
-		if (irc_menu)
-			irc_draw_menu_popup();
+		wind_get(irc_window, WF_NEXTXYWH, &visible.g_x, &visible.g_y,
+			&visible.g_w, &visible.g_h);
 	}
+	xy[0] = wkx;
+	xy[1] = wky;
+	xy[2] = wkx + wkw - 1;
+	xy[3] = wky + wkh - 1;
+	vs_clip(irc_vdi, TRUE, xy);
+	wind_update(END_UPDATE);
 }
 
 /* service the socket while a dialog is open */
