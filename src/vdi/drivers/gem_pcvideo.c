@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include "gem_config.h"
 
 #include "gem_video_cga.h"
 #include "gem_video_common.h"
@@ -42,7 +43,7 @@ gem_requested_adapter(void)
 {
 	const char *name;
 
-	name = getenv("GEM_VIDEO");
+	name = gem_config_get("GEM_VIDEO");
 	if (!name || !*name || !strcmp(name, "auto"))
 		return gem_bios_video_detect();
 	if (!strcmp(name, "vga"))

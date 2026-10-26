@@ -35,9 +35,11 @@ The resident executable has two 64 KiB code banks.  Check them with:
 
   grep -E '^\.text|^\.fartext' build/maps/gem.map
 
-Run the IRC model check with:
+Both bank sizes must be strictly smaller than 0x10000.
 
-  make -f Makefile.elks check-irc
+Run the configuration, serial mouse packet and IRC checks with:
+
+  make -f Makefile.elks check
 
 Install
 -------
@@ -46,6 +48,9 @@ Install
       DESTDIR=/path/to/elks/target install
 
 This installs the six executables in /bin and the resources in /lib/gemsys.
+It also installs /etc/gem.conf with Microsoft serial mouse defaults. Existing
+gem.conf and desktop.inf files are preserved. Set MOUSE_PORT=/dev/ttyS1 for
+a COM2 mouse; the default is COM1 (/dev/ttyS0). See README.md for the settings.
 System text uses the resident PC BIOS font, so no font files are installed.
 Build the ELKS image normally after installation.
 
@@ -58,6 +63,19 @@ Boot ELKS and run:
 
 GEM starts Desktop.  Launch Clock, Calculator, GemView, or GemIRC from Desktop.
 ELKS schedules every process.  Closing one app does not stop the others.
+
+MartyPC checks
+--------------
+
+Checked with stock ELKS 0.9.2 on an emulated IBM 5160, 8088 at 4.77 MHz,
+640 KiB RAM and EGA. The Microsoft serial mouse used COM2, selected through
+/etc/gem.conf with no mouse environment overrides. Desktop started, movement
+worked in both directions, left and right press/release worked separately
+and together, and input continued after eight menu open/close cycles.
+The serial port viewer confirmed COM2 LCR=0x02 (7N1).
+
+The host checks cover all 262144 movement/button packet combinations,
+packet resynchronisation, UART setup/restoration and configuration parsing.
 
 Cleaning
 --------

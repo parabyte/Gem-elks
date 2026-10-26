@@ -14,6 +14,7 @@
 
 #include "gem_aes_resident.h"
 #include "gem_channels.h"
+#include "gem_config.h"
 #include "gem_exec.h"
 #include "gem_scrap_resident.h"
 #include "gem_system_resource.h"
@@ -533,6 +534,7 @@ static WORD
 gem_server_wait(VOID)
 {
 	fd_set readers;
+	struct timeval timeout;
 	int maximum;
 	int ready;
 	WORD channel;
@@ -548,7 +550,15 @@ gem_server_wait(VOID)
 		if (gem_server_clients[channel].descriptor > maximum)
 			maximum = gem_server_clients[channel].descriptor;
 	}
-	ready = select(maximum + 1, &readers, NULL, NULL, NULL);
+	/* the alarm can go off while drawing or building the fd set, ELKS
+	 * only sends it once, so dont sleep forever before handling it
+	 * a timeout also covers the gap between checking the flag and select
+	 */
+	timeout.tv_sec = 0;
+	timeout.tv_usec = (gem_server_tick_pending
+		|| gem_server_children_changed || gem_server_stop)
+		? 0 : GEM_SERVER_TICK_US;
+	ready = select(maximum + 1, &readers, NULL, NULL, &timeout);
 	if (ready < 0)
 		return errno == EINTR;
 	if (FD_ISSET(gem_server_listener, &readers)
@@ -570,6 +580,12 @@ main(void)
 {
 	WORD failed;
 
+	if (gem_config_load() < 0) {
+		gem_server_say("GEM: cannot read " GEM_CONFIG_FILE ", errno ");
+		gem_server_say_number((UWORD) errno);
+		gem_server_say("\r\n");
+		return 1;
+	}
 	gem_server_stop = FALSE;
 	gem_server_children_changed = FALSE;
 	gem_server_tick_pending = FALSE;

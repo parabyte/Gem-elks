@@ -17,10 +17,12 @@
 #include <unistd.h>
 
 #include "vdi.h"
+#include "gem_config.h"
 #include "gem_vdi_sound.h"
 #include "drivers/gem_kbd_raw.h"
 #include "drivers/gem_mouse_amstrad.h"
 #include "drivers/gem_mouse_ms.h"
+#include "drivers/gem_mouse_serial.h"
 
 /* set by the video driver once it holds the console graphics lock and
  * turns on DCSET_KRAW, then the keyboard fd gives raw set-1 scancodes
@@ -190,17 +192,14 @@ gem_termios_make_keyboard_raw(GEM_TERMIOS_ABI *settings)
 }
 
 static void GEM_INPUT_COLD
-gem_termios_make_mouse_raw(GEM_TERMIOS_ABI *settings, GEM_VDI_UBYTE protocol)
+gem_termios_make_mouse_raw(GEM_TERMIOS_ABI *settings)
 {
-	/* ms packets carry seven bits */
-	settings->lflag_low &= (GEM_VDI_UWORD) ~(ECHO | ECHONL | ICANON
-		| IEXTEN | ISIG);
-	settings->iflag_low &= (GEM_VDI_UWORD) ~(ICRNL | INPCK | ISTRIP
-		| IXON | BRKINT | IGNBRK);
-	settings->oflag_low &= (GEM_VDI_UWORD) ~OPOST;
-	settings->cflag_low &= (GEM_VDI_UWORD) ~(CBAUD | CSIZE | PARENB);
-	settings->cflag_low |= (GEM_VDI_UWORD) (B1200 | CREAD | CLOCAL);
-	settings->cflag_low |= CS7;
+	/* ms mice need 1200 baud, seven bits, no parity and one stop bit
+	 * clear the old tty flags, CR/LF translation eats packet bytes and
+	 * flow control can stop them, CRTSCTS is in the high word
+	 */
+	memset(settings, 0, sizeof(*settings));
+	settings->cflag_low = B1200 | CS7 | CREAD | CLOCAL;
 	settings->control[VMIN] = 0;
 	settings->control[VTIME] = 0;
 }
@@ -236,7 +235,7 @@ gem_open_keyboard(void)
 	const char *path;
 
 	gem_keyboard_termios_valid = 0;
-	path = getenv("CONSOLE");
+	path = gem_config_get("CONSOLE");
 	if (path) {
 		gem_keyboard_fd = gem_open_keyboard_path(path);
 		return;
@@ -256,13 +255,18 @@ gem_open_mouse(void)
 	gem_mouse_termios_valid = 0;
 	gem_mouse_fd = -1;
 	gem_mouse_active = 0;
-	/* default is the PC1640 mouse, MOUSE_PROTOCOL=ms picks the serial one */
-	protocol = getenv("MOUSE_PROTOCOL");
-	if (!protocol || !strcmp(protocol, "amstrad"))
+	protocol = gem_config_get("MOUSE_PROTOCOL");
+	if (protocol && !strcmp(protocol, "amstrad"))
 		gem_mouse_protocol = GEM_MOUSE_PROTOCOL_AMSTRAD;
-	else if (!strcmp(protocol, "ms"))
+	else if (!protocol || !strcmp(protocol, "ms"))
 		gem_mouse_protocol = GEM_MOUSE_PROTOCOL_MS;
 	else
+		return;
+
+	path = gem_config_get("MOUSE_PORT");
+	if (!path)
+		path = GEM_MOUSE_DEFAULT;
+	if (!strcmp(path, "none"))
 		return;
 
 	if (gem_mouse_protocol == GEM_MOUSE_PROTOCOL_AMSTRAD) {
@@ -272,29 +276,28 @@ gem_open_mouse(void)
 		return;
 	}
 
-	path = getenv("MOUSE_PORT");
-	if (!path)
-		path = GEM_MOUSE_DEFAULT;
-	if (!strcmp(path, "none"))
-		return;
-
 	gem_mouse_fd = (GEM_VDI_WORD) open(path,
 		O_RDONLY | O_NONBLOCK | O_NOCTTY);
 	if (gem_mouse_fd < 0)
 		return;
-	gem_mouse_active = 1;
 	gem_mouse_ms_reset();
 
-	/* some packet devices dont do termios, theyre already raw, a failed
-	 * tcgetattr dont mean the open failed */
 	if (tcgetattr(gem_mouse_fd,
-			(struct termios *) &gem_mouse_old_termios) == 0) {
-		settings = gem_mouse_old_termios;
-		gem_termios_make_mouse_raw(&settings, gem_mouse_protocol);
-		if (tcsetattr(gem_mouse_fd, TCSAFLUSH,
-				(struct termios *) &settings) == 0)
-			gem_mouse_termios_valid = 1;
-	}
+			(struct termios *) &gem_mouse_old_termios) < 0)
+		goto failed;
+	gem_termios_make_mouse_raw(&settings);
+	gem_mouse_serial_save(gem_mouse_fd);
+	if (tcsetattr(gem_mouse_fd, TCSAFLUSH,
+			(struct termios *) &settings) < 0)
+		goto failed;
+	gem_mouse_termios_valid = 1;
+	gem_mouse_serial_setup();
+	gem_mouse_active = 1;
+	return;
+failed:
+	gem_mouse_serial_restore();
+	close(gem_mouse_fd);
+	gem_mouse_fd = -1;
 }
 
 static GEM_VDI_WORD
@@ -430,6 +433,7 @@ gem_vdi_close_input(void)
 		if (gem_mouse_termios_valid)
 			tcsetattr(gem_mouse_fd, TCSANOW,
 				(struct termios *) &gem_mouse_old_termios);
+		gem_mouse_serial_restore();
 		close(gem_mouse_fd);
 	}
 	gem_keyboard_fd = -1;

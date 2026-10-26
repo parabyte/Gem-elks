@@ -62,6 +62,36 @@ Rebuild the ELKS image, boot it, then run:
 The server starts `/bin/gemdesk`. Programs launched by Desktop stay separate
 ELKS processes and run together.
 
+## Configuration
+
+`/etc/gem.conf` holds the video, keyboard and mouse settings. The default is
+automatic video detection and a Microsoft serial mouse on COM1:
+
+```ini
+GEM_VIDEO=auto
+MOUSE_PROTOCOL=ms
+MOUSE_PORT=/dev/ttyS0
+```
+
+Use `/dev/ttyS1` for COM2, `MOUSE_PROTOCOL=amstrad` for the PC1512/1640 mouse,
+or `MOUSE_PROTOCOL=none` to disable the hardware mouse. Keep the mouse port
+free of getty and serial-console services. The serial driver sets 1200 baud,
+seven data bits, no parity and one stop bit.
+Older ELKS 8250 drivers ignore the termios word length, so GEM also sets the
+UART framing directly for ttyS0 through ttyS3 and restores it on exit.
+
+`CONSOLE=/dev/tty1` selects the keyboard console. Without it, GEM tries tty1
+and then `/dev/console`. `GEM_VIDEO` accepts `auto`, `ega`, `vga`, `cga`,
+`herc`, `hercules` and `pega`.
+
+Settings use unquoted `KEY=VALUE` lines. Spaces and `#` comments are allowed;
+the file must be smaller than 1024 bytes. Environment variables override the
+file. A missing file uses the built-in defaults. Unknown keys, malformed
+lines and oversized files stop startup with an error.
+
+The usual GEM Desktop settings stay in `/lib/gemsys/desktop.inf`. Installation
+preserves both configuration files when they already exist.
+
 ## Programs
 
 - `gemdesk` - OpenGEM Desktop
@@ -78,10 +108,10 @@ GemIRC can use its connection dialog or command-line values:
 
 Its default is `irc.libera.chat:6667`, channel `#osdev`.
 
-Run the host IRC checks with:
+Run the host configuration, serial mouse packet and IRC checks with:
 
 ```sh
-make -f Makefile.elks check-irc
+make -f Makefile.elks check
 ```
 
 See [BUILDING.txt](BUILDING.txt) and [documentation.txt](documentation.txt) for

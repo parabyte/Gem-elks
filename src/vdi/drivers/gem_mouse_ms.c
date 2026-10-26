@@ -12,18 +12,6 @@
 static GEM_VDI_UBYTE gem_ms_packet[3];
 static GEM_VDI_UBYTE gem_ms_packet_count;
 
-/* place the high movement bits */
-static const GEM_VDI_UBYTE gem_ms_x_high[4] = {
-	0x00, 0x40, 0x80, 0xc0
-};
-
-static const GEM_VDI_UBYTE gem_ms_y_high[16] = {
-	0x00, 0x00, 0x00, 0x00,
-	0x40, 0x00, 0x00, 0x00,
-	0x80, 0x00, 0x00, 0x00,
-	0xc0, 0x00, 0x00, 0x00
-};
-
 void
 gem_mouse_ms_reset(void)
 {
@@ -34,9 +22,6 @@ GEM_VDI_WORD
 gem_mouse_ms_parse(GEM_VDI_UBYTE byte, GEM_VDI_COORD *delta_x,
 	GEM_VDI_COORD *delta_y, GEM_VDI_WORD *buttons)
 {
-	GEM_VDI_UWORD x_value;
-	GEM_VDI_UWORD y_value;
-
 	/* bit 6 marks a packet header, data bytes carry six bits */
 	if (!gem_ms_packet_count) {
 		if (!(byte & 0x40))
@@ -56,16 +41,11 @@ gem_mouse_ms_parse(GEM_VDI_UBYTE byte, GEM_VDI_COORD *delta_x,
 		return 0;
 	gem_ms_packet_count = 0;
 
-	x_value = gem_ms_x_high[gem_ms_packet[0] & 0x03];
-	x_value |= gem_ms_packet[1] & 0x3f;
-	y_value = gem_ms_y_high[gem_ms_packet[0] & 0x0c];
-	y_value |= gem_ms_packet[2] & 0x3f;
-	*delta_x = (GEM_VDI_COORD) x_value;
-	*delta_y = (GEM_VDI_COORD) y_value;
-	if (*delta_x > 127)
-		*delta_x -= 256;
-	if (*delta_y > 127)
-		*delta_y -= 256;
+	/* put the high bits back, then sign extend the eight-bit movement */
+	*delta_x = (signed char) (((gem_ms_packet[0] & 0x03) << 6)
+		| (gem_ms_packet[1] & 0x3f));
+	*delta_y = (signed char) (((gem_ms_packet[0] & 0x0c) << 4)
+		| (gem_ms_packet[2] & 0x3f));
 
 	*buttons = 0;
 	if (gem_ms_packet[0] & 0x20)

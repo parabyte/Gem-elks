@@ -73,6 +73,7 @@ VDI_SRCS := \
 	src/vdi/gem_input.c \
 	src/vdi/drivers/gem_kbd_raw.c \
 	src/vdi/drivers/gem_mouse_ms.c \
+	src/vdi/drivers/gem_mouse_serial.c \
 	src/vdi/drivers/gem_mouse_amstrad.c \
 	src/vdi/drivers/gem_pcvideo.c \
 	src/vdi/drivers/gem_video_common.c \
@@ -84,6 +85,7 @@ VDI_SRCS := \
 VDI_ASM_SRCS := src/vdi/drivers/gem_pcvideo_asm.S
 
 RESIDENT_SRCS := \
+	src/server/gem_config.c \
 	src/aes/gem_exec_elks.c \
 	src/aes/gem_aes_resident.c \
 	src/aes/gem_aes_tick.c \
@@ -209,7 +211,10 @@ GEMIRC := $(BIN_DIR)/gemirc
 LIBVDI := $(LIB_DIR)/libvdi.a
 LIBGEM := $(LIB_DIR)/libgem.a
 IRC_MODEL_TEST := $(BUILD_DIR)/tests/gem_irc_model
-.PHONY: all check-elks check-irc install clean
+CONFIG_TEST := $(BUILD_DIR)/tests/gem_config_test
+MOUSE_TEST := $(BUILD_DIR)/tests/gem_mouse_ms_test
+SERIAL_TEST := $(BUILD_DIR)/tests/gem_mouse_serial_test
+.PHONY: all check-elks check-irc check check-config check-mouse install clean
 
 all: check-elks $(GEM) $(GEMDESK) $(GEMCLOCK) $(GEMCALC) $(GEMVIEW) $(GEMIRC)
 
@@ -230,6 +235,35 @@ $(IRC_MODEL_TEST): tests/gem_irc_model.c src/apps/irc/gem_irc_app.c \
 
 check-irc: $(IRC_MODEL_TEST)
 	$(IRC_MODEL_TEST)
+
+$(CONFIG_TEST): tests/gem_config_test.c src/server/gem_config.c src/include/gem_config.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -std=c89 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L \
+		-DGEM_CONFIG_FILE='"$(BUILD_DIR)/tests/gem.conf"' -I src/include \
+		tests/gem_config_test.c src/server/gem_config.c -o $@
+
+$(MOUSE_TEST): tests/gem_mouse_ms_test.c src/vdi/drivers/gem_mouse_ms.c \
+		src/vdi/drivers/gem_mouse_ms.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -std=c89 -Wall -Wextra -Werror -DELKS_GEM_AES_H \
+		-I src/include -I src/vdi \
+		tests/gem_mouse_ms_test.c src/vdi/drivers/gem_mouse_ms.c -o $@
+
+check-config: $(CONFIG_TEST)
+	$(CONFIG_TEST)
+
+$(SERIAL_TEST): tests/gem_mouse_serial_test.c src/vdi/drivers/gem_mouse_serial.c \
+		src/vdi/drivers/gem_mouse_serial.h tests/include/arch/io.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -std=c89 -Wall -Wextra -Werror -D_DEFAULT_SOURCE \
+		-Dfstat=gem_test_fstat -I tests/include -I src/vdi \
+		tests/gem_mouse_serial_test.c src/vdi/drivers/gem_mouse_serial.c -o $@
+
+check-mouse: $(MOUSE_TEST) $(SERIAL_TEST)
+	$(MOUSE_TEST)
+	$(SERIAL_TEST)
+
+check: check-config check-mouse check-irc
 
 $(LIBVDI): $(VDI_OBJECTS) $(VDI_ASM_OBJECTS)
 	@mkdir -p $(dir $@)
@@ -271,6 +305,12 @@ $(CLIENT_OBJ_DIR)/%.o: src/%.S | check-elks
 
 $(DESKTOP_OBJECTS) $(DESKTOP_ACC_OBJECTS): $(wildcard src/aes/opengem/*.h) \
 	$(wildcard src/include/*.h)
+
+$(OBJ_DIR)/server/gem_config.o $(OBJ_DIR)/server/gem_main.o \
+$(OBJ_DIR)/vdi/gem_input.o $(OBJ_DIR)/vdi/drivers/gem_pcvideo.o: src/include/gem_config.h
+
+$(OBJ_DIR)/vdi/gem_input.o $(OBJ_DIR)/vdi/drivers/gem_mouse_serial.o: \
+	src/vdi/drivers/gem_mouse_serial.h
 
 $(GEM): $(RESIDENT_OBJECTS) $(LIBVDI)
 	@mkdir -p $(dir $@) $(MAP_DIR)
@@ -337,7 +377,11 @@ $(GEMIRC): $(IRC_OBJECTS) \
 		$(APP_RUNTIME_OBJECT) $(LIBGEM)
 
 install: all
-	install -d $(DESTDIR)/bin $(DESTDIR)/lib/gemsys
+	install -d $(DESTDIR)/bin $(DESTDIR)/lib/gemsys $(DESTDIR)/etc
+	@test -e $(DESTDIR)/etc/gem.conf || \
+		install -m 644 assets/etc/gem.conf $(DESTDIR)/etc/gem.conf
+	@test -e $(DESTDIR)/lib/gemsys/desktop.inf || \
+		install -m 644 assets/lib/gemsys/desktop.inf $(DESTDIR)/lib/gemsys/desktop.inf
 	install -m 755 $(GEM) $(DESTDIR)/bin/gem
 	install -m 755 $(GEMDESK) $(DESTDIR)/bin/gemdesk
 	install -m 755 $(GEMCLOCK) $(DESTDIR)/bin/gemclock
@@ -346,7 +390,6 @@ install: all
 	install -m 755 $(GEMIRC) $(DESTDIR)/bin/gemirc
 	install -m 644 assets/lib/gemsys/gem.rsc \
 		assets/lib/gemsys/desktop.rsc \
-		assets/lib/gemsys/desktop.inf \
 		assets/lib/gemsys/deskhi.icn \
 		assets/lib/gemsys/desklo.icn \
 		$(DESTDIR)/lib/gemsys/

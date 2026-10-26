@@ -19,12 +19,18 @@ _fmemalloc, and the normal file and socket calls directly.
 
 The stock ELKS timer is one-shot.  GEM rearms setitimer after SIGALRM.  PC
 text points at the resident BIOS font already used by the ELKS console.
+The socket wait is bounded to 20 ms so an alarm delivered during drawing
+cannot leave the server asleep with a pending tick. Input and deferred AES
+replies continue even if the alarm arrives just before select.
 
 Main files
 ----------
 
   src/server/gem_main.c
       AF_UNIX server, ELKS timer, child reaping, and client channels.
+
+  src/server/gem_config.c
+      Reads /etc/gem.conf. Environment settings override the file.
 
   src/aes/gem_exec_elks.c
       Packs a GEM command tail, then calls ELKS vfork and _execve.
@@ -52,6 +58,11 @@ Main files
 
   src/vdi/
       Resident VDI, input, BIOS font binding, video, mouse, palette, and sound.
+
+  src/vdi/drivers/gem_mouse_serial.c
+      Sets the 8250 UART to 7N1 where the ELKS driver only changes baud rate.
+      The device number selects COM1 through COM4, including tty symlinks.
+      ELKS still owns serial interrupts and the receive queue.
 
   src/apps/irc/
       Antler IRC state, protocol, interface, and direct ELKS socket transport.
